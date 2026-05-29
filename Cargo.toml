@@ -1,0 +1,23 @@
+[package]
+name = "linear-tui"
+version = "0.1.0"
+edition = "2021"
+description = "A TUI client for Linear.app, modeled after slack-tui"
+license = "MIT"
+default-run = "linear-tui"
+
+[[bin]]
+name = "linear-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"

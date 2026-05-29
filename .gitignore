@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+config.lua
+
+# transient Claude session coordination state
+/.claude/lobby.json
+/.claude/lobby.lock

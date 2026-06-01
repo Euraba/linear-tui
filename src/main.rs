@@ -6,9 +6,13 @@
 //! an in-flight request never blocks the UI.
 
 mod app;
+mod cache;
 mod client;
 mod config;
+mod images;
 mod models;
+mod search;
+mod settings;
 mod ui;
 mod worker;
 
@@ -61,7 +65,17 @@ fn main() -> Result<()> {
     let mut terminal = setup_terminal().context("setting up terminal")?;
     install_panic_hook();
 
-    let mut app = App::new(tx_req);
+    // Detect the terminal's graphics protocol + font size by querying stdio.
+    // Must happen after raw mode is on (so we can read the reply). Kitty and
+    // ghostty resolve to the Kitty protocol; anything else degrades to a
+    // unicode-halfblocks renderer, which works everywhere.
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
+
+    // Effective settings: saved state file > Lua `cache_mode` > built-in default.
+    let settings = settings::Settings::load(cfg.cache_mode);
+
+    let mut app = App::new(tx_req, picker, settings.cache_mode);
     if let Some(team) = cfg.default_team {
         app.status = format!("Default team: {team} (select to load)");
     }

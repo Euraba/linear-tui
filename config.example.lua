@@ -18,4 +18,10 @@ return {
 
   -- Optional: how many issues to fetch per view (1–250).
   page_size = 50,
+
+  -- Optional: initial ticket cache mode — "off", "memory", or "disk".
+  -- Defaults to "disk". You can change this live from the in-app Settings
+  -- panel (press ","); that choice is saved separately and takes precedence
+  -- over this value on the next launch.
+  cache_mode = "disk",
 }

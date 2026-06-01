@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -21,3 +21,11 @@ mlua = { version = "0.10", features = ["lua54", "vendored"] }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+# Terminal image rendering. v9 is the release that targets ratatui 0.29
+# (v10+ require ratatui 0.30). Both kitty and ghostty are auto-detected as the
+# Kitty graphics protocol; unsupported terminals fall back to unicode halfblocks.
+ratatui-image = { version = "9.0.0", default-features = false, features = ["crossterm"] }
+# We decode images ourselves and hand `DynamicImage`s to ratatui-image, so we
+# pick just the formats Linear uploads use (default-features off to stay lean).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+sha2 = "0.11"

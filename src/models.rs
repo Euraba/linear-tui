@@ -5,10 +5,10 @@
 //!   Slack Channel -> a `View` (a saved filter over issues, e.g. "Active", "My Issues")
 //!   Slack message -> a Linear `Issue` (and its `IssueDetail` when opened)
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A Linear team (the top-level grouping, like a Slack workspace/team).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Team {
     pub id: String,
     pub name: String,
@@ -16,7 +16,7 @@ pub struct Team {
 }
 
 /// A Linear project within a team. Selecting one narrows the issue list.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -25,7 +25,7 @@ pub struct Project {
 }
 
 /// A workflow state an issue can be in (Todo, In Progress, Done, ...).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowState {
     pub id: String,
     pub name: String,
@@ -37,7 +37,7 @@ pub struct WorkflowState {
 }
 
 /// A Linear user (used for assignees / members).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
     pub name: String,
@@ -52,7 +52,7 @@ impl User {
 }
 
 /// A summary row for an issue, as shown in the issue list.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
     pub identifier: String,
@@ -78,7 +78,7 @@ impl Issue {
 }
 
 /// A single comment on an issue.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Comment {
     pub body: String,
     #[serde(default)]
@@ -88,7 +88,7 @@ pub struct Comment {
 }
 
 /// The full detail of an issue, fetched when the user opens it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueDetail {
     pub id: String,
     pub identifier: String,

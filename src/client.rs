@@ -7,6 +7,7 @@ use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
+use crate::images;
 use crate::models::{Issue, IssueDetail, Project, Team, User, View, WorkflowState};
 
 const ENDPOINT: &str = "https://api.linear.app/graphql";
@@ -201,6 +202,22 @@ impl LinearClient {
             issue["comments"] = nodes;
         }
         serde_json::from_value(issue).map_err(|e| anyhow!("decode error: {e}"))
+    }
+
+    /// Download the raw bytes of an image URL. The personal API key is attached
+    /// only for Linear-hosted URLs (where it's required), never for third-party
+    /// hosts referenced in an issue — see [`images::is_linear_host`].
+    pub async fn fetch_image(&self, url: &str) -> Result<Vec<u8>> {
+        let mut req = self.http.get(url);
+        if images::is_linear_host(url) {
+            req = req.header("Authorization", &self.api_key);
+        }
+        let resp = req.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(anyhow!("image fetch failed (HTTP {status})"));
+        }
+        Ok(resp.bytes().await?.to_vec())
     }
 
     // ----- Mutations -----------------------------------------------------

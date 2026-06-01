@@ -11,9 +11,13 @@ use ratatui::{
     },
     Frame,
 };
+use ratatui_image::{Resize, StatefulImage};
 
-use crate::app::{App, InputKind, Overlay, Pane, PickerKind};
+use crate::app::{App, EditMode, FindContext, InputKind, Overlay, Pane, PickerKind};
+use crate::images::ImageState;
 use crate::models::View;
+use crate::search;
+use crate::settings::CacheMode;
 
 const ACCENT: Color = Color::Rgb(94, 106, 210); // Linear's purple-ish accent.
 
@@ -51,12 +55,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_status(f, app, root[1]);
 
     match &app.overlay {
-        Overlay::None => {}
+        Overlay::None | Overlay::ImageViewer { .. } => {}
         Overlay::Help => draw_help(f),
+        Overlay::Settings => draw_settings(f, app.cache_mode),
         Overlay::Input { kind, buffer } => draw_input(f, *kind, buffer),
         Overlay::Picker { kind, items, state } => {
             draw_picker(f, *kind, items, &mut state.clone())
         }
+    }
+
+    // The image viewer needs `&mut App` (rendering mutates the cached protocol),
+    // so it's handled outside the immutable match above. Extract the index with
+    // a short-lived borrow first to free `app` for the mutable call.
+    let viewer_index = match &app.overlay {
+        Overlay::ImageViewer { index } => Some(*index),
+        _ => None,
+    };
+    if let Some(index) = viewer_index {
+        draw_image_viewer(f, app, index);
     }
 }
 
@@ -128,10 +144,17 @@ fn draw_projects(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_issues(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = area.width.saturating_sub(2) as usize;
+    // Highlight `/` find matches in the title (only when the find is scoped to
+    // the issue list).
+    let find_q = match app.active_find() {
+        Some((q, FindContext::Issues)) => q.to_string(),
+        _ => String::new(),
+    };
     let items: Vec<ListItem> = app
-        .issues
+        .visible
         .iter()
-        .map(|i| {
+        .map(|&gi| {
+            let i = &app.issues[gi];
             let state = i
                 .state
                 .as_ref()
@@ -152,23 +175,34 @@ fn draw_issues(f: &mut Frame, app: &mut App, area: Rect) {
             let head_len = 2 + prio.len() + 1 + i.identifier.len() + 1;
             let avail = inner_width.saturating_sub(head_len + assignee.len() + 2);
             let title: String = i.title.chars().take(avail.max(4)).collect();
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(format!("{state} "), Style::default().fg(state_color)),
                 Span::styled(format!("{prio:<4} "), priority_style(i.priority)),
                 Span::styled(
                     format!("{} ", i.identifier),
                     Style::default().fg(Color::Yellow),
                 ),
-                Span::raw(title),
-                Span::styled(
-                    format!("  {assignee}"),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]))
+            ];
+            spans.extend(highlight_spans(&title, &find_q, Style::default()).0);
+            spans.push(Span::styled(
+                format!("  {assignee}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
-    let title = format!("Issues · {}", app.current_view.label());
+    // Show "(visible/total)" when an `f` filter is hiding rows.
+    let title = if app.visible.len() != app.issues.len() {
+        format!(
+            "Issues · {} ({}/{})",
+            app.current_view.label(),
+            app.visible.len(),
+            app.issues.len()
+        )
+    } else {
+        format!("Issues · {}", app.current_view.label())
+    };
     let list = List::new(items)
         .block(pane_block(&title, app.focus == Pane::Issues))
         .highlight_style(selected_style())
@@ -176,63 +210,58 @@ fn draw_issues(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.issues_state);
 }
 
-fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
+fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let block = pane_block("Issue", app.focus == Pane::Detail);
-    let text: Text = match &app.detail {
-        None => Text::from(vec![
-            Line::from(""),
-            Line::from("  Select an issue and press Enter to open it."),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Press ? for keybindings.",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ]),
-        Some(d) => {
-            let mut lines: Vec<Line> = Vec::new();
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{} ", d.identifier),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(d.title.clone(), Style::default().add_modifier(Modifier::BOLD)),
-            ]));
-            let state = d.state.as_ref().map(|s| s.name.as_str()).unwrap_or("—");
-            let state_color = d
-                .state
-                .as_ref()
-                .and_then(|s| parse_hex_color(&s.color))
-                .unwrap_or(Color::Reset);
-            let assignee = d
-                .assignee
-                .as_ref()
-                .map(|a| a.label())
-                .unwrap_or("Unassigned");
-            lines.push(Line::from(vec![
-                Span::styled("state: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(state.to_string(), Style::default().fg(state_color)),
-                Span::raw("   "),
-                Span::styled("assignee: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(assignee.to_string()),
-                Span::raw("   "),
-                Span::styled("priority: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(priority_label(d.priority).to_string()),
-            ]));
-            if let Some(url) = &d.url {
-                lines.push(Line::from(Span::styled(
-                    url.clone(),
-                    Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED),
-                )));
-            }
-            lines.push(Line::from(""));
+    // Highlight + record `/` find matches only when the find is scoped here.
+    let find_q = match app.active_find() {
+        Some((q, FindContext::Detail)) if !q.is_empty() => Some(q.to_string()),
+        _ => None,
+    };
+    let q = find_q.as_deref().unwrap_or("");
 
+    let selected = app.selected_issue();
+    // Use the loaded detail only if it's for the issue currently hovered;
+    // otherwise we're mid-fetch and fall back to the list row's data.
+    let detail = app
+        .detail
+        .as_ref()
+        .filter(|d| selected.map(|i| i.id == d.id).unwrap_or(false));
+    let image_count = app.detail_image_urls.len();
+
+    // Rendered-line indices of detail matches, for n/N jumps.
+    let mut match_lines: Vec<usize> = Vec::new();
+
+    let lines: Vec<Line> = match (detail, selected) {
+        // Full detail for the hovered issue.
+        (Some(d), _) => {
+            let mut lines = Vec::new();
+            push_header(
+                &mut lines,
+                &d.identifier,
+                &d.title,
+                d.state.as_ref().map(|s| s.name.as_str()),
+                d.state.as_ref().and_then(|s| parse_hex_color(&s.color)),
+                d.assignee.as_ref().map(|a| a.label()),
+                d.priority,
+                d.url.as_deref(),
+            );
+            if image_count > 0 {
+                lines.push(Line::from(Span::styled(
+                    format!("🖼 {image_count} image(s) · press v to view"),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+            }
             if let Some(desc) = d.description.as_ref().filter(|s| !s.is_empty()) {
                 for l in desc.lines() {
-                    lines.push(Line::from(l.to_string()));
+                    let (spans, matched) = highlight_spans(l, q, Style::default());
+                    if matched {
+                        match_lines.push(lines.len());
+                    }
+                    lines.push(Line::from(spans));
                 }
                 lines.push(Line::from(""));
             }
-
             lines.push(Line::from(Span::styled(
                 format!("── Comments ({}) ──", d.comments.len()),
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
@@ -245,11 +274,7 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             }
             for c in &d.comments {
                 let who = c.user.as_ref().map(|u| u.label()).unwrap_or("someone");
-                let when = c
-                    .created_at
-                    .as_deref()
-                    .map(short_date)
-                    .unwrap_or_default();
+                let when = c.created_at.as_deref().map(short_date).unwrap_or_default();
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("{who} "),
@@ -258,29 +283,183 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
                     Span::styled(when, Style::default().fg(Color::DarkGray)),
                 ]));
                 for l in c.body.lines() {
-                    lines.push(Line::from(format!("  {l}")));
+                    let text = format!("  {l}");
+                    let (spans, matched) = highlight_spans(&text, q, Style::default());
+                    if matched {
+                        match_lines.push(lines.len());
+                    }
+                    lines.push(Line::from(spans));
                 }
                 lines.push(Line::from(""));
             }
-            Text::from(lines)
+            lines
         }
+        // Detail still loading: instant header from the list row.
+        (None, Some(i)) => {
+            let mut lines = Vec::new();
+            push_header(
+                &mut lines,
+                &i.identifier,
+                &i.title,
+                i.state.as_ref().map(|s| s.name.as_str()),
+                i.state.as_ref().and_then(|s| parse_hex_color(&s.color)),
+                i.assignee.as_ref().map(|a| a.label()),
+                i.priority,
+                None,
+            );
+            lines.push(Line::from(Span::styled(
+                "  Loading description & comments…",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines
+        }
+        (None, None) => vec![
+            Line::from(""),
+            Line::from("  Select an issue — its body shows here automatically."),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Press ? for keybindings.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
     };
 
-    let para = Paragraph::new(text)
+    let para = Paragraph::new(Text::from(lines))
         .block(block)
         .wrap(Wrap { trim: false })
         .scroll((app.detail_scroll, 0));
     f.render_widget(para, area);
+
+    // Hand the match-line indices to the app for `n`/`N` jumps (only while a
+    // detail find is live; otherwise there are no detail matches to cycle).
+    if find_q.is_some() {
+        if app.find_detail_idx >= match_lines.len() {
+            app.find_detail_idx = 0;
+        }
+        app.find_detail_lines = match_lines;
+    } else {
+        app.find_detail_lines.clear();
+    }
+}
+
+/// Render the shared issue header (identifier, title, state/assignee/priority,
+/// optional url) into `lines`. Used for both full detail and the loading view.
+#[allow(clippy::too_many_arguments)]
+fn push_header(
+    lines: &mut Vec<Line<'static>>,
+    identifier: &str,
+    title: &str,
+    state: Option<&str>,
+    state_color: Option<Color>,
+    assignee: Option<&str>,
+    priority: i64,
+    url: Option<&str>,
+) {
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{identifier} "),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(title.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("state: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            state.unwrap_or("—").to_string(),
+            Style::default().fg(state_color.unwrap_or(Color::Reset)),
+        ),
+        Span::raw("   "),
+        Span::styled("assignee: ", Style::default().fg(Color::DarkGray)),
+        Span::raw(assignee.unwrap_or("Unassigned").to_string()),
+        Span::raw("   "),
+        Span::styled("priority: ", Style::default().fg(Color::DarkGray)),
+        Span::raw(priority_label(priority).to_string()),
+    ]));
+    if let Some(url) = url {
+        lines.push(Line::from(Span::styled(
+            url.to_string(),
+            Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED),
+        )));
+    }
+    lines.push(Line::from(""));
+}
+
+/// Build a span run for `text` in `base` style, with smart-case matches of
+/// `query` reverse-highlighted. Also reports whether any match was found.
+fn highlight_spans(text: &str, query: &str, base: Style) -> (Vec<Span<'static>>, bool) {
+    let ranges = if query.is_empty() {
+        Vec::new()
+    } else {
+        search::match_ranges(text, query)
+    };
+    if ranges.is_empty() {
+        return (vec![Span::styled(text.to_string(), base)], false);
+    }
+    let hl = Style::default()
+        .bg(Color::Yellow)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+    let mut spans = Vec::new();
+    let mut last = 0;
+    for (s, e) in ranges {
+        if s > last {
+            spans.push(Span::styled(text[last..s].to_string(), base));
+        }
+        spans.push(Span::styled(text[s..e].to_string(), hl));
+        last = e;
+    }
+    if last < text.len() {
+        spans.push(Span::styled(text[last..].to_string(), base));
+    }
+    (spans, true)
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+    // The `/` find and `f` filter input bar takes over the status line.
+    if let Some(editing) = &app.editing {
+        let (sigil, action) = match editing.mode {
+            EditMode::Filter => ('f', "Enter:apply  Esc:clear"),
+            EditMode::Find(_) => ('/', "Enter:jump  Esc:cancel"),
+        };
+        let line = Line::from(vec![
+            Span::styled(
+                format!(" {sigil}{}\u{2588} ", editing.buffer),
+                Style::default().bg(ACCENT).fg(Color::White),
+            ),
+            Span::raw("  "),
+            Span::styled(action, Style::default().fg(Color::DarkGray)),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    // A committed `/` find shows a small indicator with jump/clear hints.
+    if let Some(find) = &app.find {
+        let count = match find.context {
+            FindContext::Detail => format!("  {} match(es)", app.find_detail_lines.len()),
+            FindContext::Issues => String::new(),
+        };
+        let line = Line::from(vec![
+            Span::styled(
+                format!(" /{}{count} ", find.query),
+                Style::default().bg(ACCENT).fg(Color::White),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                "n/N:jump  Esc:clear",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
+
     let spinner = if app.inflight > 0 { "⣾ " } else { "" };
     let hint = match app.focus {
         Pane::Views | Pane::Teams | Pane::Projects => {
-            "j/k:select+load  Enter:focus issues  n:new  ?:help  q:quit"
+            "j/k:select+load  Enter:issues  n:new  ,:settings  ?:help  q:quit"
         }
-        Pane::Issues => "Enter:open  s:state  a:assign  m:comment  n:new  r:reload  ?:help",
-        Pane::Detail => "j/k:scroll  s:state  a:assign  m:comment  Tab:next  ?:help",
+        Pane::Issues => "j/k:hover  /:find  f:filter  v:images  s:state  a:assign  m:comment  r:reload",
+        Pane::Detail => "j/k:scroll  /:find  v:images  s:state  a:assign  m:comment  ,:settings  ?:help",
     };
     let line = Line::from(vec![
         Span::styled(
@@ -359,6 +538,113 @@ fn draw_picker(
     f.render_stateful_widget(list, area, state);
 }
 
+/// Full-pane image viewer overlay. Renders the current issue's `index`-th image
+/// (decoded by the worker, cached on `app`), with the title showing position.
+fn draw_image_viewer(f: &mut Frame, app: &mut App, index: usize) {
+    let count = app.detail_image_urls.len();
+    let url = app.detail_image_urls.get(index).cloned();
+    let ident = app
+        .detail
+        .as_ref()
+        .map(|d| d.identifier.clone())
+        .unwrap_or_default();
+
+    let area = centered(f.area(), 80, 80);
+    f.render_widget(Clear, area);
+
+    let title = if count > 0 {
+        format!(" {ident} · image {}/{} ", index + 1, count)
+    } else {
+        format!(" {ident} · images ")
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green))
+        .title(Span::styled(title, Style::default().fg(Color::Green)))
+        .title_bottom(Line::from(" n/p: prev·next   Esc/q: close ").centered());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    match url.as_deref().and_then(|u| app.images.get_mut(u)) {
+        Some(ImageState::Ready(protocol)) => {
+            f.render_stateful_widget(StatefulImage::new().resize(Resize::Fit(None)), inner, protocol);
+        }
+        Some(ImageState::Failed(err)) => {
+            let msg = vec![
+                Line::from(Span::styled(
+                    "  Could not load image",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(format!("  {err}")),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {}", url.as_deref().unwrap_or("")),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: false }), inner);
+        }
+        _ => {
+            // Still loading, or the index fell out of range after a reload.
+            let msg = if count == 0 { "  No images." } else { "  Loading image…" };
+            f.render_widget(
+                Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray))),
+                inner,
+            );
+        }
+    }
+}
+
+/// Runtime settings panel. Currently a single row — the cache mode — with the
+/// three choices listed and the active one marked.
+fn draw_settings(f: &mut Frame, mode: CacheMode) {
+    let area = centered(f.area(), 56, 50);
+    f.render_widget(Clear, area);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "linear-tui — settings",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Cache mode   ", Style::default().fg(Color::Gray)),
+            Span::styled(format!(" ‹ {} › ", mode.label()), selected_style()),
+        ]),
+        Line::from(""),
+    ];
+    for m in CacheMode::ALL {
+        let current = m == mode;
+        let style = if current {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} {:<7}", if current { "●" } else { " " }, m.label()),
+                style,
+            ),
+            Span::styled(
+                format!("  {}", m.describe()),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ←/→ or Enter: change    Esc: close (saved)",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green))
+        .title(Span::styled(" Settings ", Style::default().fg(Color::Green)));
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn draw_help(f: &mut Frame) {
     let area = centered(f.area(), 60, 70);
     f.render_widget(Clear, area);
@@ -370,15 +656,19 @@ fn draw_help(f: &mut Frame) {
         Line::from(""),
         Line::from("  Tab / Shift+Tab   cycle pane focus"),
         Line::from("  j / k  ↑ / ↓       move selection / scroll"),
-        Line::from("  (views, teams & projects load issues as you select)"),
-        Line::from("  Enter             open issue / focus issue list"),
+        Line::from("  (selecting anything loads automatically — no Enter)"),
+        Line::from("  Enter             focus issue list / detail pane"),
         Line::from(""),
+        Line::from("  /                 find — jump to matches (n/N to cycle)"),
+        Line::from("  f                 filter the issue list to matches"),
+        Line::from("  v                 view embedded images (n/p to cycle)"),
         Line::from("  s                 change issue state"),
         Line::from("  a                 change assignee"),
         Line::from("  m                 add a comment"),
         Line::from("  n                 create a new issue"),
         Line::from("  r                 reload current issue list"),
         Line::from(""),
+        Line::from("  ,                 settings (cache mode)"),
         Line::from("  ?                 toggle this help"),
         Line::from("  q / Ctrl-C        quit"),
         Line::from(""),

@@ -4,9 +4,11 @@
 //! and later drains [`Response`]s. A single background task owns the
 //! [`LinearClient`] and services requests one at a time.
 
+use image::DynamicImage;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::client::LinearClient;
+use crate::images;
 use crate::models::{Issue, IssueDetail, Project, Team, User, View, WorkflowState};
 
 /// Work the UI asks the background task to perform.
@@ -24,7 +26,12 @@ pub enum Request {
         epoch: u64,
     },
     LoadProjects { team_id: String },
-    LoadIssueDetail { issue_id: String },
+    /// Fetch full detail for an issue. `epoch` is echoed back so the UI can
+    /// drop results for an issue it's no longer hovering.
+    LoadIssueDetail { issue_id: String, epoch: u64 },
+    /// Download + decode an image embedded in an issue. Runs as a detached task
+    /// (see [`spawn`]) so a slow image fetch never delays issue navigation.
+    LoadImage { url: String },
     /// Workflow states for the state picker.
     LoadStates { team_id: String },
     /// Members for the assignee picker.
@@ -46,7 +53,11 @@ pub enum Response {
         epoch: u64,
         issues: Vec<Issue>,
     },
-    IssueDetail(Box<IssueDetail>),
+    IssueDetail { epoch: u64, detail: Box<IssueDetail> },
+    /// A decoded image, keyed by the URL the UI requested.
+    Image { url: String, image: Box<DynamicImage> },
+    /// An image download/decode failed; `error` is shown in the viewer.
+    ImageFailed { url: String, error: String },
     States(Vec<WorkflowState>),
     Members(Vec<User>),
     /// A mutation finished; the string is a human-readable status line.
@@ -68,6 +79,28 @@ pub fn spawn(
         let mut viewer_id = String::new();
 
         while let Some(req) = rx.recv().await {
+            // Image fetches run concurrently as detached tasks: they can be slow
+            // (network + decode) and must not block issue/detail navigation,
+            // which flows through the sequential `handle` path below.
+            if let Request::LoadImage { url } = req {
+                let client = client.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let resp = match load_image(&client, &url).await {
+                        Ok(image) => Response::Image {
+                            url,
+                            image: Box::new(image),
+                        },
+                        Err(e) => Response::ImageFailed {
+                            url,
+                            error: format!("{e:#}"),
+                        },
+                    };
+                    let _ = tx.send(resp);
+                });
+                continue;
+            }
+
             let result = handle(&client, &mut viewer_id, req).await;
             // If the UI is gone, stop.
             let send = match result {
@@ -115,9 +148,12 @@ async fn handle(
         Request::LoadProjects { team_id } => {
             Response::Projects(client.team_projects(&team_id).await?)
         }
-        Request::LoadIssueDetail { issue_id } => {
-            Response::IssueDetail(Box::new(client.issue_detail(&issue_id).await?))
-        }
+        Request::LoadIssueDetail { issue_id, epoch } => Response::IssueDetail {
+            epoch,
+            detail: Box::new(client.issue_detail(&issue_id).await?),
+        },
+        // Intercepted in `spawn` before reaching here.
+        Request::LoadImage { .. } => unreachable!("LoadImage runs as a detached task"),
         Request::LoadStates { team_id } => Response::States(client.team_states(&team_id).await?),
         Request::LoadMembers { team_id } => {
             Response::Members(client.team_members(&team_id).await?)
@@ -154,4 +190,36 @@ async fn handle(
             }
         }
     })
+}
+
+/// Fetch an image's bytes (disk cache first, then network) and decode them.
+async fn load_image(client: &LinearClient, url: &str) -> anyhow::Result<DynamicImage> {
+    let cache = images::cache_path(url);
+
+    // Serve from the on-disk cache when we have valid bytes there.
+    if let Some(path) = &cache {
+        if let Ok(bytes) = tokio::fs::read(path).await {
+            if let Ok(image) = decode(bytes).await {
+                return Ok(image);
+            }
+            // Cached bytes were unreadable/corrupt — fall through and re-fetch.
+        }
+    }
+
+    let bytes = client.fetch_image(url).await?;
+    if let Some(path) = &cache {
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        // Best-effort: a cache write failure shouldn't fail the load.
+        let _ = tokio::fs::write(path, &bytes).await;
+    }
+    decode(bytes).await
+}
+
+/// Decode image bytes off the async runtime (decoding is CPU-bound/blocking).
+async fn decode(bytes: Vec<u8>) -> anyhow::Result<DynamicImage> {
+    tokio::task::spawn_blocking(move || image::load_from_memory(&bytes))
+        .await?
+        .map_err(|e| anyhow::anyhow!("could not decode image: {e}"))
 }

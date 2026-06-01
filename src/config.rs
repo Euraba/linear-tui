@@ -20,11 +20,16 @@ use anyhow::{anyhow, Context, Result};
 use mlua::{Lua, Value};
 use std::path::PathBuf;
 
+use crate::settings::CacheMode;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub api_key: String,
     pub default_team: Option<String>,
     pub page_size: u32,
+    /// Initial cache mode (overridden by the saved state file / in-app Settings
+    /// panel). `None` means "use the built-in default".
+    pub cache_mode: Option<CacheMode>,
 }
 
 impl Config {
@@ -50,6 +55,7 @@ impl Config {
                 api_key: String::new(),
                 default_team: None,
                 page_size: 50,
+                cache_mode: None,
             },
         };
 
@@ -106,11 +112,16 @@ impl Config {
             _ => None,
         };
         let page_size: u32 = table.get("page_size").unwrap_or(50);
+        let cache_mode = match table.get::<Value>("cache_mode") {
+            Ok(Value::String(s)) => CacheMode::parse(&s.to_string_lossy()),
+            _ => None,
+        };
 
         Ok(Config {
             api_key,
             default_team,
             page_size: page_size.clamp(1, 250),
+            cache_mode,
         })
     }
 }
@@ -144,5 +155,17 @@ mod tests {
     #[test]
     fn rejects_non_table() {
         assert!(Config::from_lua_str("return 42").is_err());
+    }
+
+    #[test]
+    fn parses_cache_mode_when_present() {
+        let cfg =
+            Config::from_lua_str(r#"return { api_key = "k", cache_mode = "memory" }"#).unwrap();
+        assert_eq!(cfg.cache_mode, Some(CacheMode::Memory));
+        // Absent / unknown values leave it unset (use the built-in default).
+        let cfg = Config::from_lua_str(r#"return { api_key = "k" }"#).unwrap();
+        assert_eq!(cfg.cache_mode, None);
+        let cfg = Config::from_lua_str(r#"return { api_key = "k", cache_mode = "nope" }"#).unwrap();
+        assert_eq!(cfg.cache_mode, None);
     }
 }

@@ -2,6 +2,9 @@
 **/*.rs.bk
 config.lua
 
+# generated Neovim helptags (plugin managers regenerate these)
+/doc/tags
+
 # transient Claude session coordination state
 /.claude/lobby.json
 /.claude/lobby.lock

@@ -48,10 +48,16 @@ impl Pane {
 }
 
 /// A free-text prompt overlay (comment body / new-issue title).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputKind {
     Comment,
     CreateIssue,
+    /// Create a sub-issue under an already-open issue. Carries the parent's id
+    /// (for the mutation) and identifier (for the prompt label).
+    CreateSubIssue {
+        parent_id: String,
+        parent_label: String,
+    },
 }
 
 /// A selectable-list overlay (state picker / assignee picker).
@@ -59,6 +65,8 @@ pub enum InputKind {
 pub enum PickerKind {
     State,
     Assignee,
+    /// Choose a sub-issue to open (navigates rather than mutating).
+    SubIssue,
 }
 
 /// The active modal overlay, if any.
@@ -152,8 +160,14 @@ pub struct App {
     /// Bumped on every detail load so a slow fetch for a no-longer-hovered
     /// issue can't overwrite the current one.
     detail_epoch: u64,
-    /// Issue id whose detail is currently loaded/loading (hover dedup).
-    detail_target: Option<String>,
+    /// Issue id the detail pane is showing. Normally the hovered list issue,
+    /// but parent/sub-issue navigation can point it at an off-list issue.
+    pub detail_target: Option<String>,
+    /// (identifier, title) of `detail_target` for the loading header when the
+    /// target isn't in the current list (e.g. a navigated parent/sub-issue).
+    pub detail_stub: Option<(String, String)>,
+    /// Back-stack of previously-viewed issue ids for `Backspace` navigation.
+    detail_history: Vec<String>,
     /// Image URLs embedded in the currently-loaded issue, in display order.
     /// Drives the detail-pane hint and the image viewer.
     pub detail_image_urls: Vec<String>,
@@ -219,6 +233,8 @@ impl App {
             detail_scroll: 0,
             detail_epoch: 0,
             detail_target: None,
+            detail_stub: None,
+            detail_history: Vec::new(),
             detail_image_urls: Vec::new(),
             detail_cache: HashMap::new(),
             picker,
@@ -407,7 +423,10 @@ impl App {
         if self.detail_target.as_deref() == Some(issue.id.as_str()) {
             return; // already showing this issue
         }
+        // Moving the list selection is a fresh navigation root.
+        self.detail_history.clear();
         self.detail_target = Some(issue.id.clone());
+        self.detail_stub = Some((issue.identifier.clone(), issue.title.clone()));
         self.detail_scroll = 0;
         // Stale-while-revalidate: show a cached detail instantly if we have it
         // (and load its images); otherwise drop the previous issue's image list
@@ -616,6 +635,132 @@ impl App {
         }
     }
 
+    // ----- issue navigation (parent / sub-issues) -----------------------
+
+    /// The id of the issue the detail pane is showing (and the target of
+    /// actions like state/assignee/comment). Normally the hovered list issue,
+    /// but parent/sub-issue navigation can point it elsewhere.
+    fn current_issue_id(&self) -> Option<String> {
+        self.detail_target.clone()
+    }
+
+    /// (identifier, title) for `id`, looked up among the loaded issue list and
+    /// the current detail's parent/children — used for the loading header.
+    fn issue_label(&self, id: &str) -> Option<(String, String)> {
+        if let Some(i) = self.issues.iter().find(|i| i.id == id) {
+            return Some((i.identifier.clone(), i.title.clone()));
+        }
+        if let Some(d) = &self.detail {
+            if let Some(p) = d.parent.as_ref().filter(|p| p.id == id) {
+                return Some((p.identifier.clone(), p.title.clone()));
+            }
+            if let Some(c) = d.children.iter().find(|c| c.id == id) {
+                return Some((c.identifier.clone(), c.title.clone()));
+            }
+        }
+        None
+    }
+
+    /// Show `id` in the detail pane (cached instantly if available, then
+    /// refreshed), syncing the list selection when the issue is on-screen.
+    fn navigate_to(&mut self, id: String) {
+        self.detail_stub = self.issue_label(&id);
+        if let Some(vi) = self.visible.iter().position(|&gi| self.issues[gi].id == id) {
+            self.issues_state.select(Some(vi));
+        }
+        self.detail_scroll = 0;
+        self.detail_target = Some(id.clone());
+        match self.cached_detail(&id) {
+            Some(cached) => {
+                self.detail = Some(cached);
+                self.refresh_detail_images();
+            }
+            None => {
+                self.detail = None;
+                self.detail_image_urls.clear();
+            }
+        }
+        self.request_detail(id);
+        self.focus = Pane::Detail;
+    }
+
+    /// Follow a parent/sub-issue link, remembering where we came from so
+    /// `Backspace` can return.
+    fn go_to_issue(&mut self, id: String) {
+        if self.detail_target.as_deref() == Some(id.as_str()) {
+            self.focus = Pane::Detail;
+            return;
+        }
+        if let Some(cur) = self.detail_target.clone() {
+            self.detail_history.push(cur);
+        }
+        self.navigate_to(id);
+    }
+
+    /// Jump to the parent of the issue currently shown (if it has one).
+    fn go_to_parent(&mut self) {
+        let parent = self
+            .detail
+            .as_ref()
+            .and_then(|d| d.parent.as_ref())
+            .map(|p| p.id.clone());
+        match parent {
+            Some(id) => self.go_to_issue(id),
+            None => self.status = "No parent issue".into(),
+        }
+    }
+
+    /// Open a picker of the shown issue's sub-issues; choosing one navigates.
+    fn open_subissue_picker(&mut self) {
+        let items: Vec<(String, String)> = self
+            .detail
+            .as_ref()
+            .map(|d| {
+                d.children
+                    .iter()
+                    .map(|c| (c.id.clone(), format!("{} {}", c.identifier, c.title)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if items.is_empty() {
+            self.status = "No sub-issues".into();
+            return;
+        }
+        let mut state = ListState::default();
+        state.select(Some(0));
+        self.overlay = Overlay::Picker {
+            kind: PickerKind::SubIssue,
+            items,
+            state,
+        };
+    }
+
+    /// Go back to the previously-viewed issue (`Backspace`).
+    fn nav_back(&mut self) {
+        if let Some(prev) = self.detail_history.pop() {
+            self.navigate_to(prev);
+        }
+    }
+
+    /// Re-fetch the issue currently shown, after a list reload. If the reload's
+    /// preview re-pointed `detail_target` at the list selection, restore it to
+    /// `id` first — so a refresh keeps a navigated parent/sub-issue on screen.
+    /// Unlike [`App::navigate_to`], this preserves scroll and focus.
+    fn refresh_detail_for(&mut self, id: String) {
+        if self.detail_target.as_deref() != Some(id.as_str()) {
+            self.detail_stub = self.issue_label(&id);
+            if let Some(vi) = self.visible.iter().position(|&gi| self.issues[gi].id == id) {
+                self.issues_state.select(Some(vi));
+            }
+            self.detail_target = Some(id.clone());
+            if let Some(cached) = self.cached_detail(&id) {
+                self.detail = Some(cached);
+                self.refresh_detail_images();
+            }
+        }
+        self.request_detail(id);
+    }
+
     /// Recompute the current issue's embedded image URLs from the loaded detail
     /// and kick off a fetch for any we haven't requested yet this session.
     fn refresh_detail_images(&mut self) {
@@ -729,11 +874,13 @@ impl App {
             Response::ActionDone { message, refresh } => {
                 self.status = message;
                 if refresh {
-                    // Reload the list (keeping the current selection) and force
-                    // a re-fetch of the open issue's detail.
+                    // Reload the list, then keep the detail pane on the issue we
+                    // were viewing and re-fetch it — even if that's a navigated
+                    // parent/sub-issue rather than the list selection.
+                    let shown = self.detail_target.clone();
                     self.reload_issues();
-                    if let Some(id) = self.detail_target.clone() {
-                        self.request_detail(id);
+                    if let Some(id) = shown {
+                        self.refresh_detail_for(id);
                     }
                 }
             }
@@ -786,18 +933,26 @@ impl App {
         let Some((id, _label)) = items.get(idx).cloned() else {
             return;
         };
-        let Some(issue) = self.selected_issue().cloned() else {
+        // Sub-issue picks navigate rather than mutate.
+        if kind == PickerKind::SubIssue {
+            self.go_to_issue(id);
+            return;
+        }
+        // State/assignee changes target the issue currently shown in the detail
+        // pane (which may be a navigated parent/sub-issue, not the list row).
+        let Some(issue_id) = self.current_issue_id() else {
             return;
         };
         match kind {
             PickerKind::State => self.send(Request::SetState {
-                issue_id: issue.id,
+                issue_id,
                 state_id: id,
             }),
             PickerKind::Assignee => self.send(Request::SetAssignee {
-                issue_id: issue.id,
+                issue_id,
                 assignee_id: (!id.is_empty()).then_some(id),
             }),
+            PickerKind::SubIssue => {}
         }
     }
 
@@ -814,11 +969,8 @@ impl App {
         }
         match kind {
             InputKind::Comment => {
-                if let Some(issue) = self.selected_issue().cloned() {
-                    self.send(Request::AddComment {
-                        issue_id: issue.id,
-                        body: text,
-                    });
+                if let Some(issue_id) = self.current_issue_id() {
+                    self.send(Request::AddComment { issue_id, body: text });
                 }
             }
             InputKind::CreateIssue => {
@@ -826,6 +978,17 @@ impl App {
                     self.send(Request::CreateIssue {
                         team_id: team.id,
                         title: text,
+                        parent_id: None,
+                    });
+                }
+            }
+            // Sub-issue: same team as the `n` flow, parented to the open issue.
+            InputKind::CreateSubIssue { parent_id, .. } => {
+                if let Some(team) = self.selected_team().cloned() {
+                    self.send(Request::CreateIssue {
+                        team_id: team.id,
+                        title: text,
+                        parent_id: Some(parent_id),
                     });
                 }
             }
@@ -985,6 +1148,27 @@ impl App {
                 }
                 return;
             }
+            // Shift-N creates a sub-issue under the currently open issue.
+            KeyCode::Char('N') => {
+                if self.selected_team().is_none() {
+                    return;
+                }
+                // Clone out of the borrow before mutating `self.overlay`.
+                let parent = self
+                    .detail
+                    .as_ref()
+                    .map(|d| (d.id.clone(), d.identifier.clone()));
+                match parent {
+                    Some((parent_id, parent_label)) => {
+                        self.overlay = Overlay::Input {
+                            kind: InputKind::CreateSubIssue { parent_id, parent_label },
+                            buffer: String::new(),
+                        };
+                    }
+                    None => self.status = "Open an issue first to add a sub-issue (N)".into(),
+                }
+                return;
+            }
             _ => {}
         }
 
@@ -1072,6 +1256,9 @@ impl App {
             KeyCode::Enter => self.focus = Pane::Detail,
             KeyCode::Char('/') => self.start_find(FindContext::Issues),
             KeyCode::Char('f') => self.start_filter(),
+            KeyCode::Char('p') => self.go_to_parent(),
+            KeyCode::Char('c') => self.open_subissue_picker(),
+            KeyCode::Backspace => self.nav_back(),
             KeyCode::Char('v') => self.open_image_viewer(),
             KeyCode::Char('s') => {
                 if let Some(team) = self.selected_team().cloned() {
@@ -1084,7 +1271,7 @@ impl App {
                 }
             }
             KeyCode::Char('m')
-                if self.selected_issue().is_some() => {
+                if self.detail_target.is_some() => {
                     self.overlay = Overlay::Input {
                         kind: InputKind::Comment,
                         buffer: String::new(),
@@ -1104,6 +1291,9 @@ impl App {
             }
             KeyCode::Char('/') => self.start_find(FindContext::Detail),
             KeyCode::Char('f') => self.start_filter(),
+            KeyCode::Char('p') => self.go_to_parent(),
+            KeyCode::Char('c') => self.open_subissue_picker(),
+            KeyCode::Backspace => self.nav_back(),
             KeyCode::Char('v') => self.open_image_viewer(),
             KeyCode::Char('s') => {
                 if let Some(team) = self.selected_team().cloned() {
@@ -1116,7 +1306,7 @@ impl App {
                 }
             }
             KeyCode::Char('m')
-                if self.selected_issue().is_some() => {
+                if self.detail_target.is_some() => {
                     self.overlay = Overlay::Input {
                         kind: InputKind::Comment,
                         buffer: String::new(),

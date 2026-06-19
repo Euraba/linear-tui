@@ -1,0 +1,116 @@
+*linear-tui.txt*        Native Neovim frontend for the linear-tui backend
+
+==============================================================================
+CONTENTS                                                  *linear-tui-contents*
+
+  1. Introduction ....................... |linear-tui-introduction|
+  2. Requirements ....................... |linear-tui-requirements|
+  3. Setup .............................. |linear-tui-setup|
+  4. Commands ........................... |linear-tui-commands|
+  5. Mappings ........................... |linear-tui-mappings|
+  6. How it works ....................... |linear-tui-architecture|
+  7. Health ............................. |linear-tui-health|
+
+==============================================================================
+1. INTRODUCTION                                       *linear-tui-introduction*
+
+linear-tui.nvim browses and triages your Linear issues without leaving Neovim.
+It is a thin frontend: the Rust `linear-tui` binary runs headless as a
+co-process (`linear-tui serve`) and does all the real work — GraphQL, caching,
+and reading your API key. The plugin renders three native panes (Views/Teams/
+Projects sidebar, an issue list, and a detail pane) and forwards your actions
+over JSON-RPC on the child's stdin/stdout.
+
+Because the backend owns the config, the plugin never sees your API token.
+
+==============================================================================
+2. REQUIREMENTS                                       *linear-tui-requirements*
+
+- Neovim 0.10+ (uses |vim.system()| for the backend co-process).
+- The `linear-tui` binary, built from this repo (`cargo build --release`) or
+  installed (`cargo install --path .`).
+- A Linear API key, configured exactly as for the CLI: `api_key` in
+  ~/.config/linear-tui/config.lua, or $LINEAR_API_KEY in the environment.
+
+==============================================================================
+3. SETUP                                                     *linear-tui-setup*
+
+Zero config works if `linear-tui` is on $PATH or built in this repo: >lua
+    require("linear-tui").setup()
+<
+Options (all optional): >lua
+    require("linear-tui").setup({
+      bin = nil,            -- explicit path to the linear-tui binary
+      default_team = nil,   -- team key to select on open (e.g. "ENG")
+      sidebar_width = 32,
+      detail_width = nil,   -- defaults to ~40% of columns (clamped 48..72)
+    })
+<
+Binary resolution order:                                       *linear-tui-bin*
+  1. `bin` from setup()
+  2. $LINEAR_TUI_BIN
+  3. `linear-tui` on $PATH
+  4. <repo>/target/release/linear-tui, then target/debug/linear-tui
+
+A handy keymap: >lua
+    vim.keymap.set("n", "<leader>li", "<cmd>Linear<cr>", { desc = "Linear" })
+<
+==============================================================================
+4. COMMANDS                                               *linear-tui-commands*
+
+                                                                      *:Linear*
+:Linear            Open the UI (focuses it if already open).
+                                                                *:LinearToggle*
+:LinearToggle      Toggle the UI open/closed.
+                                                                 *:LinearClose*
+:LinearClose       Close the UI.
+
+==============================================================================
+5. MAPPINGS                                               *linear-tui-mappings*
+
+Buffer-local to the linear-tui panes:
+
+  <Tab> / <S-Tab>  cycle panes (sidebar -> list -> detail)
+  q                close the UI
+  r                reload the issue list (and current detail)
+  ?                show this key summary
+
+Sidebar:
+  <CR>             select the view / team / project under the cursor
+                   (reloads the issue list immediately)
+
+Issue list:
+  j / k            move; hovering a row auto-loads its detail
+  <CR>             move focus into the detail pane (to scroll)
+
+List + detail (act on the open issue):
+  s                change state          a   change assignee
+  m                add a comment         n   create a new issue (current team)
+  o                open the issue in your browser
+  p                go to the parent issue
+  c                open a sub-issue (picker)
+
+State and assignee pickers use |vim.ui.select()|; comment and title prompts use
+|vim.ui.input()| — so they integrate with dressing.nvim, telescope, fzf-lua, etc.
+
+==============================================================================
+6. HOW IT WORKS                                       *linear-tui-architecture*
+
+    Neovim (this plugin) ──spawn──▶ linear-tui serve   (one child per session)
+        stdin   →  {"id":1,"method":"issues","params":{…}}
+        stdout  ←  {"id":1,"ok":true,"result":[ … ]}
+
+The child is started lazily on first use and killed on |VimLeavePre|. If it
+exits unexpectedly it is respawned on the next request. All Linear data — and
+the on-disk ticket cache — is shared with the CLI, since it is the same binary.
+
+==============================================================================
+7. HEALTH                                                   *linear-tui-health*
+
+Run: >
+    :checkhealth linear-tui
+<
+It verifies the Neovim version, locates the backend binary, and performs a live
+`viewer` round-trip to confirm the backend can authenticate to Linear.
+
+vim:tw=78:ts=8:ft=help:norl:

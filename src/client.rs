@@ -183,23 +183,34 @@ impl LinearClient {
                 id identifier title description priority url
                 state { id name type color }
                 assignee { id name displayName }
+                parent { id identifier title }
+                children(first: 50) {
+                  nodes {
+                    id identifier title priority
+                    state { id name type color }
+                    assignee { id name displayName }
+                  }
+                }
                 comments(first: 50) {
                   nodes { body createdAt user { id name displayName } }
                 }
               }
             }"#;
-        // `comments` arrives as `{ nodes: [...] }`; flatten before decoding.
+        // `comments` and `children` arrive as `{ nodes: [...] }`; flatten the
+        // connections to plain arrays before decoding.
         let mut data = self.request(q, json!({ "id": issue_id })).await?;
         let mut issue = data
             .get_mut("issue")
             .map(Value::take)
             .ok_or_else(|| anyhow!("issue not found"))?;
-        if let Some(nodes) = issue
-            .get_mut("comments")
-            .and_then(|c| c.get_mut("nodes"))
-            .map(Value::take)
-        {
-            issue["comments"] = nodes;
+        for key in ["comments", "children"] {
+            if let Some(nodes) = issue
+                .get_mut(key)
+                .and_then(|c| c.get_mut("nodes"))
+                .map(Value::take)
+            {
+                issue[key] = nodes;
+            }
         }
         serde_json::from_value(issue).map_err(|e| anyhow!("decode error: {e}"))
     }
@@ -269,16 +280,45 @@ impl LinearClient {
 
     /// Create an issue and return its human identifier (e.g. "ENG-123").
     pub async fn create_issue(&self, team_id: &str, title: &str) -> Result<String> {
+        Ok(self
+            .create_issue_full(team_id, title, None, None, None, None)
+            .await?
+            .0)
+    }
+
+    /// Create an issue with optional description, priority (0–4), assignee, and
+    /// parent (passing a `parent_id` makes it a sub-issue). Returns the new
+    /// issue's human identifier (e.g. "ENG-123") and web URL.
+    pub async fn create_issue_full(
+        &self,
+        team_id: &str,
+        title: &str,
+        description: Option<&str>,
+        priority: Option<i64>,
+        assignee_id: Option<&str>,
+        parent_id: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
+        let mut input = json!({ "teamId": team_id, "title": title });
+        if let Some(d) = description {
+            input["description"] = json!(d);
+        }
+        if let Some(p) = priority {
+            input["priority"] = json!(p);
+        }
+        if let Some(a) = assignee_id {
+            input["assigneeId"] = json!(a);
+        }
+        if let Some(parent) = parent_id {
+            input["parentId"] = json!(parent);
+        }
         let q = r#"
-            mutation($teamId: String!, $title: String!) {
-              issueCreate(input: { teamId: $teamId, title: $title }) {
+            mutation($input: IssueCreateInput!) {
+              issueCreate(input: $input) {
                 success
-                issue { identifier }
+                issue { identifier url }
               }
             }"#;
-        let data = self
-            .request(q, json!({ "teamId": team_id, "title": title }))
-            .await?;
+        let data = self.request(q, json!({ "input": input })).await?;
         let created = data.get("issueCreate");
         let ok = created
             .and_then(|c| c.get("success"))
@@ -287,11 +327,97 @@ impl LinearClient {
         if !ok {
             return Err(anyhow!("issue creation did not succeed"));
         }
-        Ok(created
-            .and_then(|c| c.get("issue"))
+        let issue = created.and_then(|c| c.get("issue"));
+        let identifier = issue
             .and_then(|i| i.get("identifier"))
             .and_then(|i| i.as_str())
             .unwrap_or("(new issue)")
-            .to_string())
+            .to_string();
+        let url = issue
+            .and_then(|i| i.get("url"))
+            .and_then(|u| u.as_str())
+            .map(str::to_string);
+        Ok((identifier, url))
+    }
+
+    /// Full-text search across every issue the key can see (Linear's
+    /// `searchIssues`). Returns the same summary rows as the issue list.
+    pub async fn search(&self, term: &str, first: u32) -> Result<Vec<Issue>> {
+        let q = r#"
+            query($term: String!, $n: Int!) {
+              searchIssues(term: $term, first: $n) {
+                nodes {
+                  id identifier title priority
+                  state { id name type color }
+                  assignee { id name displayName }
+                }
+              }
+            }"#;
+        self.query_at(q, json!({ "term": term, "n": first }), &["searchIssues", "nodes"])
+            .await
+    }
+
+    /// List issues filtered by [`View`], optionally narrowed to a team (by key)
+    /// and/or project. Unlike [`Self::issues`] this is *not* scoped to one team,
+    /// so the CLI can answer "my issues" across the whole workspace.
+    pub async fn list_issues(
+        &self,
+        view: View,
+        viewer_id: &str,
+        team_key: Option<&str>,
+        project_id: Option<&str>,
+        first: u32,
+    ) -> Result<Vec<Issue>> {
+        let mut filter = match view {
+            View::Active => json!({ "state": { "type": { "in": ["unstarted", "started"] } } }),
+            View::Backlog => json!({ "state": { "type": { "eq": "backlog" } } }),
+            View::MyIssues => json!({
+                "assignee": { "id": { "eq": viewer_id } },
+                "state": { "type": { "nin": ["completed", "canceled"] } }
+            }),
+            View::All => json!({}),
+        };
+        if let Some(key) = team_key {
+            filter["team"] = json!({ "key": { "eq": key } });
+        }
+        if let Some(pid) = project_id {
+            filter["project"] = json!({ "id": { "eq": pid } });
+        }
+        let q = r#"
+            query($filter: IssueFilter, $n: Int!) {
+              issues(filter: $filter, first: $n, orderBy: updatedAt) {
+                nodes {
+                  id identifier title priority
+                  state { id name type color }
+                  assignee { id name displayName }
+                }
+              }
+            }"#;
+        self.query_at(q, json!({ "filter": filter, "n": first }), &["issues", "nodes"])
+            .await
+    }
+
+    /// Resolve a human identifier ("ENG-123") or UUID to its canonical UUID and
+    /// owning team UUID. The `issue(id:)` field accepts either form; mutations
+    /// need the UUID, and state/assignee name lookups need the team.
+    pub async fn resolve_issue(&self, id: &str) -> Result<(String, String)> {
+        let q = r#"query($id: String!) { issue(id: $id) { id team { id } } }"#;
+        let data = self.request(q, json!({ "id": id })).await?;
+        let issue = data
+            .get("issue")
+            .filter(|v| !v.is_null())
+            .ok_or_else(|| anyhow!("no issue `{id}`"))?;
+        let uuid = issue
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("issue `{id}` missing id"))?
+            .to_string();
+        let team = issue
+            .get("team")
+            .and_then(|t| t.get("id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("issue `{id}` missing team"))?
+            .to_string();
+        Ok((uuid, team))
     }
 }

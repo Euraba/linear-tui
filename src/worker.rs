@@ -39,7 +39,12 @@ pub enum Request {
     SetState { issue_id: String, state_id: String },
     SetAssignee { issue_id: String, assignee_id: Option<String> },
     AddComment { issue_id: String, body: String },
-    CreateIssue { team_id: String, title: String },
+    /// Create an issue. A `parent_id` makes it a sub-issue of that issue.
+    CreateIssue {
+        team_id: String,
+        title: String,
+        parent_id: Option<String>,
+    },
 }
 
 /// Results / events flowing back to the UI.
@@ -182,12 +187,15 @@ async fn handle(
                 refresh: true,
             }
         }
-        Request::CreateIssue { team_id, title } => {
-            let id = client.create_issue(&team_id, &title).await?;
-            Response::ActionDone {
-                message: format!("Created {id}"),
-                refresh: true,
-            }
+        Request::CreateIssue { team_id, title, parent_id } => {
+            let (id, _url) = client
+                .create_issue_full(&team_id, &title, None, None, None, parent_id.as_deref())
+                .await?;
+            let message = match &parent_id {
+                Some(_) => format!("Created sub-issue {id}"),
+                None => format!("Created {id}"),
+            };
+            Response::ActionDone { message, refresh: true }
         }
     })
 }

@@ -58,6 +58,8 @@ Config is searched in this order: `$LINEAR_TUI_CONFIG`, then
 | `Enter`        | focus the issue list / detail pane  |
 | `/`            | find — jump between matches (`n`/`N`)|
 | `f`            | filter the issue list to matches    |
+| `p`            | go to parent issue                  |
+| `c`            | open a sub-issue (`⌫` to go back)   |
 | `v`            | view embedded images (`n`/`p` cycle)|
 | `,`            | open settings (cache mode)          |
 | `s`            | change issue state                  |
@@ -101,6 +103,19 @@ query has an uppercase letter):
 Both match across an issue's identifier, title, assignee and state. The filter
 persists as you switch views/teams (press `Esc` in the list to drop it).
 
+## Sub-issues & parents
+
+The detail pane shows an issue's relations: a `↑ parent` line when the issue is
+a sub-issue, and a `── Sub-issues (N) ──` section listing its children.
+
+- **`p`** jumps to the **parent** issue.
+- **`c`** opens a **sub-issue picker**; choosing one opens it.
+- **`⌫` (Backspace)** goes **back** to the previously-viewed issue.
+
+Navigating this way works even when the parent/sub-issue isn't in the current
+list or view — the detail pane shows the navigated issue (the list selection
+stays put), and `s` / `a` / `m` act on whichever issue is on screen.
+
 ## Images
 
 Linear issues often embed screenshots (markdown `![](…)` in the description and
@@ -141,6 +156,81 @@ the next launch; you can also set the startup default in `config.lua` with
 `cache_mode = "off" | "memory" | "disk"` (the saved panel choice wins over it).
 Delete `~/.cache/linear-tui/` to clear the cache.
 
+## CLI (`linear-tui <command>`)
+
+The same binary is **also a scriptable CLI** — run with a subcommand and it does
+one Linear operation and exits, instead of launching the TUI. It reuses the same
+config, client and models, so there's no separate auth. Issues are addressed by
+their human identifier (e.g. `ENG-123`); add `--json` to any command for
+machine-readable output.
+
+```bash
+linear-tui me                         # the authenticated user
+linear-tui teams                      # teams (KEY  Name)
+linear-tui issues                     # "My Issues" across all teams (default)
+linear-tui issues --team ENG --view active --limit 20
+linear-tui search "redis timeout"     # full-text search across all issues
+linear-tui view ENG-123               # full detail: description, sub-issues, comments
+linear-tui states  --team ENG         # workflow states / projects / members
+linear-tui projects --team ENG
+linear-tui members  --team ENG
+
+# writes (affect the real workspace)
+linear-tui create --team ENG --title "Fix login" --priority 2 --assignee me
+linear-tui create --team ENG --title "Sub-task" --parent ENG-123   # a sub-issue
+linear-tui comment ENG-123 "shipping today"
+linear-tui state   ENG-123 "In Progress"     # name, or done/todo/progress/backlog/canceled
+linear-tui assign  ENG-123 me                # me | none | <name>
+```
+
+`issues --view` is `my | active | backlog | all` (default `my`, cross-team).
+Run `linear-tui --help` for the full list. This CLI is what makes the tool usable
+by an agent (e.g. Claude Code) from any project — install the binary on your
+`PATH` (`cargo build --release` then symlink `target/release/linear-tui` into a
+`PATH` dir).
+
+## Neovim plugin
+
+This repo is **also a Neovim plugin** — the same binary, used as a backend. The
+plugin is a thin native frontend (sidebar / issue list / detail panes in real
+nvim windows); the Rust app runs headless as a co-process (`linear-tui serve`)
+and does all the work — GraphQL, caching, and reading your API key. They talk
+JSON-RPC over the child's stdin/stdout, so **the plugin never sees your token**
+and there's no second copy of the API client to keep in sync.
+
+```
+Neovim (plugin) ──spawn──▶ linear-tui serve   (one child per nvim session)
+    stdin  →  {"id":1,"method":"issues","params":{…}}
+    stdout ←  {"id":1,"ok":true,"result":[ …issues… ]}
+```
+
+**Install** (any plugin manager pointed at this repo) — e.g. lazy.nvim:
+
+```lua
+{
+  dir = "~/code/linear-tui",          -- or the repo URL
+  build = "cargo build --release",     -- builds the backend binary
+  opts = {},                           -- calls require("linear-tui").setup{}
+  cmd = { "Linear", "LinearToggle", "LinearClose" },
+}
+```
+
+Zero config is needed if `linear-tui` is on `$PATH` or built in this repo;
+otherwise set `bin`. Configure your API key exactly as for the CLI (it's the
+same binary): `api_key` in `config.lua` or `$LINEAR_API_KEY`.
+
+| Command         | Action                          |
+| --------------- | ------------------------------- |
+| `:Linear`       | open the UI                     |
+| `:LinearToggle` | toggle it                       |
+| `:LinearClose`  | close it                        |
+
+Inside: `<Tab>` cycles panes, `<CR>` in the sidebar switches view/team/project,
+hovering an issue loads its detail, and `s`/`a`/`m`/`n`/`o`/`p`/`c` change
+state / assignee / add a comment / create / open-in-browser / parent / sub-issue.
+Run `:checkhealth linear-tui` to verify the binary is found and the backend can
+authenticate. Full docs: `:help linear-tui`.
+
 ## Architecture
 
 - **`config.rs`** — loads the Lua config via [`mlua`].
@@ -157,6 +247,10 @@ Delete `~/.cache/linear-tui/` to clear the cache.
 - **`app.rs`** — UI-side state + key handling (render-agnostic).
 - **`ui.rs`** — all [`ratatui`] rendering ([`ratatui-image`] for the viewer).
 - **`main.rs`** — terminal setup and the synchronous event loop.
+- **`serve.rs`** — `linear-tui serve`: a headless stdio JSON-RPC backend that
+  reuses the same client/config/models to serve the Neovim plugin (see below).
+- **`cli.rs`** — `linear-tui <command>`: a one-shot, scriptable CLI over the same
+  client (for agents/scripts; see [CLI](#cli-linear-tui-command)).
 
 Scope is intentionally "browse + core writes" (state, assignee, comment, create),
 mirroring slack-tui's browse-plus-one-action shape.

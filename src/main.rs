@@ -7,11 +7,13 @@
 
 mod app;
 mod cache;
+mod cli;
 mod client;
 mod config;
 mod images;
 mod models;
 mod search;
+mod serve;
 mod settings;
 mod ui;
 mod worker;
@@ -34,7 +36,24 @@ use config::Config;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
-fn main() -> Result<()> {
+fn main() {
+    // Routing by the first argument, none of which touch the terminal except
+    // the default (no-args) interactive TUI:
+    //   serve    -> stdio JSON-RPC backend for the Neovim plugin
+    //   <cmd>    -> one-shot CLI (issues / view / create / …)
+    //   (none)   -> interactive TUI
+    let res = match std::env::args().nth(1).as_deref() {
+        Some("serve") => serve::run(),
+        Some(_) => cli::run(),
+        None => run_tui(),
+    };
+    if let Err(e) = res {
+        eprintln!("linear-tui: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run_tui() -> Result<()> {
     // Resolve config (Lua file / env) before touching the terminal, so errors
     // print cleanly instead of inside the alternate screen.
     let cfg = match Config::load() {

@@ -58,7 +58,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Overlay::None | Overlay::ImageViewer { .. } => {}
         Overlay::Help => draw_help(f),
         Overlay::Settings => draw_settings(f, app.cache_mode),
-        Overlay::Input { kind, buffer } => draw_input(f, *kind, buffer),
+        Overlay::Input { kind, buffer } => draw_input(f, kind, buffer),
         Overlay::Picker { kind, items, state } => {
             draw_picker(f, *kind, items, &mut state.clone())
         }
@@ -219,101 +219,141 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let q = find_q.as_deref().unwrap_or("");
 
-    let selected = app.selected_issue();
-    // Use the loaded detail only if it's for the issue currently hovered;
-    // otherwise we're mid-fetch and fall back to the list row's data.
+    // The detail pane shows `detail_target` — normally the hovered list issue,
+    // but parent/sub-issue navigation can point it at an off-list issue.
+    let target = app.detail_target.clone();
     let detail = app
         .detail
         .as_ref()
-        .filter(|d| selected.map(|i| i.id == d.id).unwrap_or(false));
+        .filter(|d| target.as_deref() == Some(d.id.as_str()));
     let image_count = app.detail_image_urls.len();
 
     // Rendered-line indices of detail matches, for n/N jumps.
     let mut match_lines: Vec<usize> = Vec::new();
 
-    let lines: Vec<Line> = match (detail, selected) {
-        // Full detail for the hovered issue.
-        (Some(d), _) => {
-            let mut lines = Vec::new();
-            push_header(
-                &mut lines,
-                &d.identifier,
-                &d.title,
-                d.state.as_ref().map(|s| s.name.as_str()),
-                d.state.as_ref().and_then(|s| parse_hex_color(&s.color)),
-                d.assignee.as_ref().map(|a| a.label()),
-                d.priority,
-                d.url.as_deref(),
-            );
-            if image_count > 0 {
-                lines.push(Line::from(Span::styled(
-                    format!("🖼 {image_count} image(s) · press v to view"),
-                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                )));
-                lines.push(Line::from(""));
-            }
-            if let Some(desc) = d.description.as_ref().filter(|s| !s.is_empty()) {
-                for l in desc.lines() {
-                    let (spans, matched) = highlight_spans(l, q, Style::default());
-                    if matched {
-                        match_lines.push(lines.len());
-                    }
-                    lines.push(Line::from(spans));
-                }
-                lines.push(Line::from(""));
-            }
+    let lines: Vec<Line> = if let Some(d) = detail {
+        // Full detail for the shown issue.
+        let mut lines = Vec::new();
+        push_header(
+            &mut lines,
+            &d.identifier,
+            &d.title,
+            d.state.as_ref().map(|s| s.name.as_str()),
+            d.state.as_ref().and_then(|s| parse_hex_color(&s.color)),
+            d.assignee.as_ref().map(|a| a.label()),
+            d.priority,
+            d.url.as_deref(),
+        );
+        // Parent link (this issue is a sub-issue).
+        if let Some(p) = &d.parent {
+            lines.push(Line::from(vec![
+                Span::styled("↑ parent  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} ", p.identifier), Style::default().fg(Color::Yellow)),
+                Span::raw(p.title.clone()),
+                Span::styled("   (p)", Style::default().fg(Color::DarkGray)),
+            ]));
+            lines.push(Line::from(""));
+        }
+        if image_count > 0 {
             lines.push(Line::from(Span::styled(
-                format!("── Comments ({}) ──", d.comments.len()),
+                format!("🖼 {image_count} image(s) · press v to view"),
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             )));
-            if d.comments.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "  (none)",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            for c in &d.comments {
-                let who = c.user.as_ref().map(|u| u.label()).unwrap_or("someone");
-                let when = c.created_at.as_deref().map(short_date).unwrap_or_default();
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("{who} "),
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(when, Style::default().fg(Color::DarkGray)),
-                ]));
-                for l in c.body.lines() {
-                    let text = format!("  {l}");
-                    let (spans, matched) = highlight_spans(&text, q, Style::default());
-                    if matched {
-                        match_lines.push(lines.len());
-                    }
-                    lines.push(Line::from(spans));
-                }
-                lines.push(Line::from(""));
-            }
-            lines
+            lines.push(Line::from(""));
         }
-        // Detail still loading: instant header from the list row.
-        (None, Some(i)) => {
-            let mut lines = Vec::new();
-            push_header(
-                &mut lines,
-                &i.identifier,
-                &i.title,
-                i.state.as_ref().map(|s| s.name.as_str()),
-                i.state.as_ref().and_then(|s| parse_hex_color(&s.color)),
-                i.assignee.as_ref().map(|a| a.label()),
-                i.priority,
-                None,
-            );
+        if let Some(desc) = d.description.as_ref().filter(|s| !s.is_empty()) {
+            for l in desc.lines() {
+                let (spans, matched) = highlight_spans(l, q, Style::default());
+                if matched {
+                    match_lines.push(lines.len());
+                }
+                lines.push(Line::from(spans));
+            }
+            lines.push(Line::from(""));
+        }
+        // Sub-issues (children).
+        if !d.children.is_empty() {
             lines.push(Line::from(Span::styled(
-                "  Loading description & comments…",
+                format!("── Sub-issues ({}) ──", d.children.len()),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            )));
+            for c in &d.children {
+                let glyph = c.state.as_ref().map(|s| state_glyph(&s.kind)).unwrap_or(' ');
+                let gcolor = c
+                    .state
+                    .as_ref()
+                    .and_then(|s| parse_hex_color(&s.color))
+                    .unwrap_or(ACCENT);
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {glyph} "), Style::default().fg(gcolor)),
+                    Span::styled(format!("{} ", c.identifier), Style::default().fg(Color::Yellow)),
+                    Span::raw(c.title.clone()),
+                ]));
+            }
+            lines.push(Line::from(Span::styled(
+                "  press c to open a sub-issue",
                 Style::default().fg(Color::DarkGray),
             )));
-            lines
+            lines.push(Line::from(""));
         }
-        (None, None) => vec![
+        lines.push(Line::from(Span::styled(
+            format!("── Comments ({}) ──", d.comments.len()),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )));
+        if d.comments.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  (none)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        for c in &d.comments {
+            let who = c.user.as_ref().map(|u| u.label()).unwrap_or("someone");
+            let when = c.created_at.as_deref().map(short_date).unwrap_or_default();
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{who} "),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(when, Style::default().fg(Color::DarkGray)),
+            ]));
+            for l in c.body.lines() {
+                let text = format!("  {l}");
+                let (spans, matched) = highlight_spans(&text, q, Style::default());
+                if matched {
+                    match_lines.push(lines.len());
+                }
+                lines.push(Line::from(spans));
+            }
+            lines.push(Line::from(""));
+        }
+        lines
+    } else if let Some(tid) = target.as_deref() {
+        // Detail still loading: instant header from the list row if the issue
+        // is on-screen, otherwise from the navigation stub.
+        let mut lines = Vec::new();
+        if let Some(row) = app.issues.iter().find(|i| i.id == tid) {
+            push_header(
+                &mut lines,
+                &row.identifier,
+                &row.title,
+                row.state.as_ref().map(|s| s.name.as_str()),
+                row.state.as_ref().and_then(|s| parse_hex_color(&s.color)),
+                row.assignee.as_ref().map(|a| a.label()),
+                row.priority,
+                None,
+            );
+        } else if let Some((ident, title)) = &app.detail_stub {
+            push_header(&mut lines, ident, title, None, None, None, 0, None);
+        } else {
+            push_header(&mut lines, "…", "", None, None, None, 0, None);
+        }
+        lines.push(Line::from(Span::styled(
+            "  Loading description & comments…",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines
+    } else {
+        vec![
             Line::from(""),
             Line::from("  Select an issue — its body shows here automatically."),
             Line::from(""),
@@ -321,7 +361,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 "  Press ? for keybindings.",
                 Style::default().fg(Color::DarkGray),
             )),
-        ],
+        ]
     };
 
     let para = Paragraph::new(Text::from(lines))
@@ -458,8 +498,8 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Pane::Views | Pane::Teams | Pane::Projects => {
             "j/k:select+load  Enter:issues  n:new  ,:settings  ?:help  q:quit"
         }
-        Pane::Issues => "j/k:hover  /:find  f:filter  v:images  s:state  a:assign  m:comment  r:reload",
-        Pane::Detail => "j/k:scroll  /:find  v:images  s:state  a:assign  m:comment  ,:settings  ?:help",
+        Pane::Issues => "j/k:hover  /:find  f:filter  c:subs  v:img  s:state  a:assign  m:comment  N:new-sub  r:reload",
+        Pane::Detail => "j/k:scroll  p:parent  c:subs  ⌫:back  /:find  v:img  s:state  a:assign  m:comment  N:new-sub",
     };
     let line = Line::from(vec![
         Span::styled(
@@ -493,12 +533,15 @@ fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
         .split(v[1])[1]
 }
 
-fn draw_input(f: &mut Frame, kind: InputKind, buffer: &str) {
+fn draw_input(f: &mut Frame, kind: &InputKind, buffer: &str) {
     let area = centered(f.area(), 60, 20);
     f.render_widget(Clear, area);
     let title = match kind {
-        InputKind::Comment => " New comment (Enter to send, Esc to cancel) ",
-        InputKind::CreateIssue => " New issue title (Enter to create, Esc to cancel) ",
+        InputKind::Comment => " New comment (Enter to send, Esc to cancel) ".to_string(),
+        InputKind::CreateIssue => " New issue title (Enter to create, Esc to cancel) ".to_string(),
+        InputKind::CreateSubIssue { parent_label, .. } => {
+            format!(" New sub-issue of {parent_label} (Enter to create, Esc to cancel) ")
+        }
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -521,6 +564,7 @@ fn draw_picker(
     let title = match kind {
         PickerKind::State => " Set state (Enter to apply, Esc to cancel) ",
         PickerKind::Assignee => " Set assignee (Enter to apply, Esc to cancel) ",
+        PickerKind::SubIssue => " Open sub-issue (Enter to open, Esc to cancel) ",
     };
     let list_items: Vec<ListItem> = items
         .iter()
@@ -661,11 +705,14 @@ fn draw_help(f: &mut Frame) {
         Line::from(""),
         Line::from("  /                 find — jump to matches (n/N to cycle)"),
         Line::from("  f                 filter the issue list to matches"),
+        Line::from("  p                 go to parent issue"),
+        Line::from("  c                 open a sub-issue   (⌫ to go back)"),
         Line::from("  v                 view embedded images (n/p to cycle)"),
         Line::from("  s                 change issue state"),
         Line::from("  a                 change assignee"),
         Line::from("  m                 add a comment"),
         Line::from("  n                 create a new issue"),
+        Line::from("  N                 create a sub-issue under the open issue"),
         Line::from("  r                 reload current issue list"),
         Line::from(""),
         Line::from("  ,                 settings (cache mode)"),

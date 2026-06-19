@@ -103,6 +103,12 @@ pub struct IssueDetail {
     pub state: Option<WorkflowState>,
     #[serde(default)]
     pub assignee: Option<User>,
+    /// The parent issue, when this issue is a sub-issue.
+    #[serde(default)]
+    pub parent: Option<Issue>,
+    /// Sub-issues of this issue (its `children` in Linear).
+    #[serde(default)]
+    pub children: Vec<Issue>,
     #[serde(default)]
     pub comments: Vec<Comment>,
 }

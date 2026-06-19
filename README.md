@@ -23,9 +23,23 @@ driven alternative for browsing and triaging issues from the terminal.
  Signed in as rares   Enter:open  s:state  a:assign  m:comment  n:new  r:reload  ?:help
 ```
 
+## Install
+
+| Platform        | Command                                                              |
+| --------------- | -------------------------------------------------------------------- |
+| Arch (`yay`)    | `yay -S linear-tui` (or `linear-tui-bin` for the prebuilt binary)    |
+| Debian/Ubuntu   | download the `.deb` from [Releases], then `sudo apt install ./linear-tui_*_amd64.deb` |
+| Prebuilt binary | grab the `*-x86_64-unknown-linux-gnu.tar.gz` from [Releases]         |
+| From source     | `cargo install --git https://github.com/Euraba/linear-tui --locked`  |
+| Build locally   | `cargo build --release` → `target/release/linear-tui`                |
+
+See [docs/PACKAGING.md](docs/PACKAGING.md) for the full release/packaging flow.
+
+[Releases]: https://github.com/Euraba/linear-tui/releases
+
 ## Setup
 
-1. **Build:** `cargo build --release` (binary at `target/release/linear-tui`).
+1. **Install** via one of the methods above (or `cargo build --release`).
 2. **Configure:** copy `config.example.lua` to `~/.config/linear-tui/config.lua`
    and set your `api_key`. Get a personal key at
    *Linear → Settings → Security & access → Personal API keys*.

@@ -56,9 +56,10 @@ impl LinearClient {
             .await?;
 
         let status = resp.status();
-        let body: Value = resp.json().await.map_err(|e| {
-            anyhow!("Linear returned a non-JSON response (HTTP {status}): {e}")
-        })?;
+        let body: Value = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Linear returned a non-JSON response (HTTP {status}): {e}"))?;
 
         if let Some(errors) = body.get("errors") {
             if !errors.is_null() {
@@ -258,8 +259,12 @@ impl LinearClient {
             mutation($id: String!, $stateId: String!) {
               issueUpdate(id: $id, input: { stateId: $stateId }) { success }
             }"#;
-        self.expect_success(q, json!({ "id": issue_id, "stateId": state_id }), "issueUpdate")
-            .await
+        self.expect_success(
+            q,
+            json!({ "id": issue_id, "stateId": state_id }),
+            "issueUpdate",
+        )
+        .await
     }
 
     pub async fn set_assignee(&self, issue_id: &str, assignee_id: Option<&str>) -> Result<()> {
@@ -359,8 +364,12 @@ impl LinearClient {
                 }
               }
             }"#;
-        self.query_at(q, json!({ "term": term, "n": first }), &["searchIssues", "nodes"])
-            .await
+        self.query_at(
+            q,
+            json!({ "term": term, "n": first }),
+            &["searchIssues", "nodes"],
+        )
+        .await
     }
 
     /// List issues filtered by [`View`], optionally narrowed to a team (by key)
@@ -399,8 +408,12 @@ impl LinearClient {
                 }
               }
             }"#;
-        self.query_at(q, json!({ "filter": filter, "n": first }), &["issues", "nodes"])
-            .await
+        self.query_at(
+            q,
+            json!({ "filter": filter, "n": first }),
+            &["issues", "nodes"],
+        )
+        .await
     }
 
     /// Resolve a human identifier ("ENG-123") or UUID to its canonical UUID and
@@ -513,7 +526,9 @@ mod tests {
         assert!(!url_is_linear("https://uploads.linear.app@evil.com/x.png"));
         // Backslash is normalized to "/" for http(s): real host is evil.com,
         // even though a naive parser sees a linear.app suffix after the '@'.
-        assert!(!url_is_linear("https://evil.com\\@uploads.linear.app/x.png"));
+        assert!(!url_is_linear(
+            "https://evil.com\\@uploads.linear.app/x.png"
+        ));
         // Look-alikes and third-party hosts.
         assert!(!url_is_linear("https://linear.app.evil.com/x.png"));
         assert!(!url_is_linear("https://evil.com/uploads.linear.app/x.png"));
@@ -527,7 +542,10 @@ mod tests {
     fn my_issues_default_filters_on_me_and_open_states() {
         let f = build_issue_filter(View::MyIssues, "VIEWER", None, &Filters::default());
         assert_eq!(f["assignee"], json!({ "id": { "eq": "VIEWER" } }));
-        assert_eq!(f["state"], json!({ "type": { "nin": ["completed", "canceled"] } }));
+        assert_eq!(
+            f["state"],
+            json!({ "type": { "nin": ["completed", "canceled"] } })
+        );
     }
 
     #[test]
@@ -543,7 +561,10 @@ mod tests {
         let f = build_issue_filter(View::MyIssues, "VIEWER", None, &filters);
         assert_eq!(f["assignee"], json!({ "id": { "eq": "TANAY" } }));
         // The view's open-states default still applies.
-        assert_eq!(f["state"], json!({ "type": { "nin": ["completed", "canceled"] } }));
+        assert_eq!(
+            f["state"],
+            json!({ "type": { "nin": ["completed", "canceled"] } })
+        );
     }
 
     #[test]

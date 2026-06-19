@@ -37,7 +37,14 @@ pub struct Config {
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
-            .field("api_key", if self.api_key.is_empty() { &"<unset>" } else { &"<redacted>" })
+            .field(
+                "api_key",
+                if self.api_key.is_empty() {
+                    &"<unset>"
+                } else {
+                    &"<redacted>"
+                },
+            )
             .field("default_team", &self.default_team)
             .field("page_size", &self.page_size)
             .field("cache_mode", &self.cache_mode)
@@ -96,8 +103,7 @@ impl Config {
     fn from_lua_file(path: &PathBuf) -> Result<Config> {
         let src = std::fs::read_to_string(path)
             .with_context(|| format!("reading config {}", path.display()))?;
-        Self::from_lua_str(&src)
-            .with_context(|| format!("evaluating config {}", path.display()))
+        Self::from_lua_str(&src).with_context(|| format!("evaluating config {}", path.display()))
     }
 
     /// Evaluate a Lua chunk that returns a config table.
@@ -182,7 +188,10 @@ mod tests {
         assert!(!out.contains("lin_api_abc123XYZ"), "{out}");
         assert!(out.contains("lin_***"), "{out}");
         // Surrounding text (and the closing quote) is preserved.
-        assert!(out.contains("bad token near api_key = \"lin_***\""), "{out}");
+        assert!(
+            out.contains("bad token near api_key = \"lin_***\""),
+            "{out}"
+        );
         // Nothing to redact → unchanged (and handles unicode safely).
         assert_eq!(redact_secrets("café — no secrets"), "café — no secrets");
     }

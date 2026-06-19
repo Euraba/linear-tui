@@ -64,8 +64,8 @@ fn run_tui() -> Result<()> {
         }
     };
 
-    let client = LinearClient::new(cfg.api_key.clone(), cfg.page_size)
-        .context("building HTTP client")?;
+    let client =
+        LinearClient::new(cfg.api_key.clone(), cfg.page_size).context("building HTTP client")?;
 
     // Tokio runtime hosts the worker; the UI loop stays on the main thread.
     let runtime = tokio::runtime::Builder::new_multi_thread()

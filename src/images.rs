@@ -130,7 +130,10 @@ mod tests {
                   again ![c](https://x/1.png) and [a link](https://x/page) too";
         let mut out = Vec::new();
         collect_image_urls(md, &mut out);
-        assert_eq!(out, vec!["https://x/1.png", "http://y/2.jpg", "https://x/1.png"]);
+        assert_eq!(
+            out,
+            vec!["https://x/1.png", "http://y/2.jpg", "https://x/1.png"]
+        );
     }
 
     #[test]

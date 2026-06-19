@@ -1,0 +1,94 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g.:
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build artifacts & publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release and upload assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Build .deb
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb --no-build --output "target/debian/linear-tui_${{ steps.ver.outputs.version }}_amd64.deb"
+
+      - name: Stage tarball
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          dir="linear-tui-${v}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/${dir}"
+          cp target/release/linear-tui "dist/${dir}/"
+          cp README.md LICENSE config.example.lua "dist/${dir}/"
+          tar -C dist -czf "dist/${dir}.tar.gz" "${dir}"
+          cp target/debian/*.deb dist/
+          cd dist && sha256sum *.tar.gz *.deb > SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/SHA256SUMS
+          generate_release_notes: true
+
+  aur:
+    name: Publish to AUR
+    needs: build
+    runs-on: ubuntu-latest
+    # AUR publishing only runs once the maintainer adds an AUR_SSH_PRIVATE_KEY
+    # secret (see docs/PACKAGING.md); otherwise every step is skipped.
+    env:
+      AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Note when AUR is not configured
+        if: env.AUR_KEY == ''
+        run: echo "No AUR_SSH_PRIVATE_KEY secret set — skipping AUR publish."
+
+      - uses: actions/checkout@v4
+        if: env.AUR_KEY != ''
+
+      - name: Render PKGBUILD for this version
+        if: env.AUR_KEY != ''
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          sha="$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1)"
+          sed -e "s/^pkgver=.*/pkgver=${v}/" \
+              -e "s/^sha256sums=.*/sha256sums=('${sha}')/" \
+              packaging/aur/PKGBUILD > PKGBUILD.rendered
+          mv PKGBUILD.rendered packaging/aur/PKGBUILD
+          echo "----- PKGBUILD -----"; cat packaging/aur/PKGBUILD
+
+      - name: Publish linear-tui to the AUR
+        if: env.AUR_KEY != ''
+        uses: KSXGitHub/github-actions-deploy-aur@v4
+        with:
+          pkgname: linear-tui
+          pkgbuild: packaging/aur/PKGBUILD
+          commit_username: ${{ github.actor }}
+          commit_email: rares@getbesty.ai
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ github.ref_name }}"
+          updpkgsums: true

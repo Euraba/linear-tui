@@ -26,20 +26,40 @@ pub enum Request {
         filters: Filters,
         epoch: u64,
     },
-    LoadProjects { team_id: String },
+    LoadProjects {
+        team_id: String,
+    },
     /// Fetch full detail for an issue. `epoch` is echoed back so the UI can
     /// drop results for an issue it's no longer hovering.
-    LoadIssueDetail { issue_id: String, epoch: u64 },
+    LoadIssueDetail {
+        issue_id: String,
+        epoch: u64,
+    },
     /// Download + decode an image embedded in an issue. Runs as a detached task
     /// (see [`spawn`]) so a slow image fetch never delays issue navigation.
-    LoadImage { url: String },
+    LoadImage {
+        url: String,
+    },
     /// Workflow states for the state picker.
-    LoadStates { team_id: String },
+    LoadStates {
+        team_id: String,
+    },
     /// Members for the assignee picker.
-    LoadMembers { team_id: String },
-    SetState { issue_id: String, state_id: String },
-    SetAssignee { issue_id: String, assignee_id: Option<String> },
-    AddComment { issue_id: String, body: String },
+    LoadMembers {
+        team_id: String,
+    },
+    SetState {
+        issue_id: String,
+        state_id: String,
+    },
+    SetAssignee {
+        issue_id: String,
+        assignee_id: Option<String>,
+    },
+    AddComment {
+        issue_id: String,
+        body: String,
+    },
     /// Create an issue. A `parent_id` makes it a sub-issue of that issue.
     CreateIssue {
         team_id: String,
@@ -59,16 +79,28 @@ pub enum Response {
         epoch: u64,
         issues: Vec<Issue>,
     },
-    IssueDetail { epoch: u64, detail: Box<IssueDetail> },
+    IssueDetail {
+        epoch: u64,
+        detail: Box<IssueDetail>,
+    },
     /// A decoded image, keyed by the URL the UI requested.
-    Image { url: String, image: Box<DynamicImage> },
+    Image {
+        url: String,
+        image: Box<DynamicImage>,
+    },
     /// An image download/decode failed; `error` is shown in the viewer.
-    ImageFailed { url: String, error: String },
+    ImageFailed {
+        url: String,
+        error: String,
+    },
     States(Vec<WorkflowState>),
     Members(Vec<User>),
     /// A mutation finished; the string is a human-readable status line.
     /// `refresh` asks the UI to reload the current issue/list.
-    ActionDone { message: String, refresh: bool },
+    ActionDone {
+        message: String,
+        refresh: bool,
+    },
     Error(String),
 }
 
@@ -162,9 +194,7 @@ async fn handle(
         // Intercepted in `spawn` before reaching here.
         Request::LoadImage { .. } => unreachable!("LoadImage runs as a detached task"),
         Request::LoadStates { team_id } => Response::States(client.team_states(&team_id).await?),
-        Request::LoadMembers { team_id } => {
-            Response::Members(client.team_members(&team_id).await?)
-        }
+        Request::LoadMembers { team_id } => Response::Members(client.team_members(&team_id).await?),
         Request::SetState { issue_id, state_id } => {
             client.set_state(&issue_id, &state_id).await?;
             Response::ActionDone {
@@ -176,7 +206,9 @@ async fn handle(
             issue_id,
             assignee_id,
         } => {
-            client.set_assignee(&issue_id, assignee_id.as_deref()).await?;
+            client
+                .set_assignee(&issue_id, assignee_id.as_deref())
+                .await?;
             Response::ActionDone {
                 message: "Assignee updated".into(),
                 refresh: true,
@@ -189,7 +221,11 @@ async fn handle(
                 refresh: true,
             }
         }
-        Request::CreateIssue { team_id, title, parent_id } => {
+        Request::CreateIssue {
+            team_id,
+            title,
+            parent_id,
+        } => {
             let (id, _url) = client
                 .create_issue_full(&team_id, &title, None, None, None, parent_id.as_deref())
                 .await?;
@@ -197,7 +233,10 @@ async fn handle(
                 Some(_) => format!("Created sub-issue {id}"),
                 None => format!("Created {id}"),
             };
-            Response::ActionDone { message, refresh: true }
+            Response::ActionDone {
+                message,
+                refresh: true,
+            }
         }
     })
 }

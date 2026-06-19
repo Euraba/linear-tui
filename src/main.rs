@@ -48,7 +48,7 @@ fn main() {
         None => run_tui(),
     };
     if let Err(e) = res {
-        eprintln!("linear-tui: {e:#}");
+        eprintln!("linear-tui: {}", config::redact_secrets(&format!("{e:#}")));
         std::process::exit(1);
     }
 }
@@ -59,7 +59,7 @@ fn run_tui() -> Result<()> {
     let cfg = match Config::load() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("linear-tui: {e:#}");
+            eprintln!("linear-tui: {}", config::redact_secrets(&format!("{e:#}")));
             std::process::exit(1);
         }
     };

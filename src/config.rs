@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use crate::settings::CacheMode;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub api_key: String,
     pub default_team: Option<String>,
@@ -30,6 +30,19 @@ pub struct Config {
     /// Initial cache mode (overridden by the saved state file / in-app Settings
     /// panel). `None` means "use the built-in default".
     pub cache_mode: Option<CacheMode>,
+}
+
+// Hand-written so the API key is never printed by a `{:?}` (logs, panics,
+// debug dumps). Only whether a key is present is shown.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("api_key", if self.api_key.is_empty() { &"<unset>" } else { &"<redacted>" })
+            .field("default_team", &self.default_team)
+            .field("page_size", &self.page_size)
+            .field("cache_mode", &self.cache_mode)
+            .finish()
+    }
 }
 
 impl Config {
@@ -126,9 +139,61 @@ impl Config {
     }
 }
 
+/// Replace anything that looks like a Linear API key (a `lin_…` token) with
+/// `lin_***`, so a stray error message can never surface the secret — e.g. a
+/// Lua syntax error that quotes the offending `api_key = "lin_…"` line. Applied
+/// at every place an error is printed or sent off-process.
+pub fn redact_secrets(input: &str) -> String {
+    const MARK: &str = "lin_";
+    if !input.contains(MARK) {
+        return input.to_string();
+    }
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if input[i..].starts_with(MARK) {
+            out.push_str("lin_***");
+            i += MARK.len();
+            // Consume the (ASCII) key body so it never reaches the output.
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-')
+            {
+                i += 1;
+            }
+        } else {
+            // Advance one whole char to stay on UTF-8 boundaries.
+            let ch = input[i..].chars().next().expect("char at boundary");
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redacts_linear_keys_anywhere_in_text() {
+        let s = r#"Lua error: [string]:1: bad token near api_key = "lin_api_abc123XYZ_-9""#;
+        let out = redact_secrets(s);
+        assert!(!out.contains("lin_api_abc123XYZ"), "{out}");
+        assert!(out.contains("lin_***"), "{out}");
+        // Surrounding text (and the closing quote) is preserved.
+        assert!(out.contains("bad token near api_key = \"lin_***\""), "{out}");
+        // Nothing to redact → unchanged (and handles unicode safely).
+        assert_eq!(redact_secrets("café — no secrets"), "café — no secrets");
+    }
+
+    #[test]
+    fn config_debug_never_prints_the_key() {
+        let cfg = Config::from_lua_str(r#"return { api_key = "lin_api_supersecret" }"#).unwrap();
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains("supersecret"), "{dbg}");
+        assert!(dbg.contains("<redacted>"), "{dbg}");
+    }
 
     #[test]
     fn parses_minimal_table() {

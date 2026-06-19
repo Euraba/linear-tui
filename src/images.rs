@@ -73,22 +73,17 @@ fn is_http_url(s: &str) -> bool {
     s.starts_with("https://") || s.starts_with("http://")
 }
 
-/// Whether `url`'s host is a Linear host. We only attach the personal API key
-/// (sent verbatim in `Authorization`) when fetching from Linear, so the secret
-/// never leaks to third-party image hosts referenced in an issue.
-pub fn is_linear_host(url: &str) -> bool {
-    let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let authority = after_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("");
-    // Strip optional `user@` and `:port`.
-    let host = authority.rsplit('@').next().unwrap_or(authority);
-    let host = host.split(':').next().unwrap_or(host);
-    host.eq_ignore_ascii_case("linear.app") || {
-        let lower = host.to_ascii_lowercase();
-        lower.ends_with(".linear.app")
-    }
+/// Whether `host` is `linear.app` or a subdomain of it. We only attach the
+/// personal API key (sent verbatim in `Authorization`) when the request goes to
+/// Linear, so the secret never leaks to third-party image hosts referenced in
+/// an issue.
+///
+/// This takes an already-parsed **host**, not a URL: the caller must obtain it
+/// with the same parser the HTTP client uses to route the request (see
+/// [`crate::client`]), so there is no parser-differential gap a crafted URL
+/// (e.g. `https://evil.com\@uploads.linear.app/`) could slip the key through.
+pub fn is_linear_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("linear.app") || host.to_ascii_lowercase().ends_with(".linear.app")
 }
 
 /// `~/.cache/linear-tui/images/` (honours `$XDG_CACHE_HOME`), if a cache dir
@@ -147,13 +142,15 @@ mod tests {
 
     #[test]
     fn linear_host_gate_is_strict() {
-        assert!(is_linear_host("https://uploads.linear.app/abc/def.png"));
-        assert!(is_linear_host("https://linear.app/x.png"));
-        assert!(is_linear_host("https://UPLOADS.LINEAR.APP/x.png?sig=1"));
-        // Must not be fooled into leaking the key to look-alikes.
-        assert!(!is_linear_host("https://linear.app.evil.com/x.png"));
-        assert!(!is_linear_host("https://evil.com/linear.app/x.png"));
-        assert!(!is_linear_host("https://i.imgur.com/x.png"));
+        // Takes a parsed host (see is_linear_host docs), not a URL.
+        assert!(is_linear_host("uploads.linear.app"));
+        assert!(is_linear_host("linear.app"));
+        assert!(is_linear_host("UPLOADS.LINEAR.APP"));
+        // Look-alikes must not be treated as Linear.
+        assert!(!is_linear_host("linear.app.evil.com"));
+        assert!(!is_linear_host("notlinear.app"));
+        assert!(!is_linear_host("evil.com"));
+        assert!(!is_linear_host("i.imgur.com"));
     }
 
     #[test]

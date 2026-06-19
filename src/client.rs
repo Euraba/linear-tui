@@ -22,6 +22,16 @@ pub struct LinearClient {
     page_size: u32,
 }
 
+// Hand-written so the API key can never reach a `{:?}` sink (logs, panics).
+impl std::fmt::Debug for LinearClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinearClient")
+            .field("api_key", &"<redacted>")
+            .field("page_size", &self.page_size)
+            .finish()
+    }
+}
+
 impl LinearClient {
     pub fn new(api_key: String, page_size: u32) -> Result<Self> {
         let http = reqwest::Client::builder()
@@ -212,11 +222,11 @@ impl LinearClient {
     }
 
     /// Download the raw bytes of an image URL. The personal API key is attached
-    /// only for Linear-hosted URLs (where it's required), never for third-party
-    /// hosts referenced in an issue — see [`images::is_linear_host`].
+    /// only when the request actually goes to Linear (where it's required),
+    /// never to third-party hosts referenced in an issue — see [`url_is_linear`].
     pub async fn fetch_image(&self, url: &str) -> Result<Vec<u8>> {
         let mut req = self.http.get(url);
-        if images::is_linear_host(url) {
+        if url_is_linear(url) {
             req = req.header("Authorization", &self.api_key);
         }
         let resp = req.send().await?;
@@ -477,10 +487,41 @@ fn build_issue_filter(
     filter
 }
 
+/// Whether the personal API key may be attached when fetching `url`. Parses
+/// with the same `url` crate reqwest uses to route the request, so the host we
+/// authorize is exactly the host the request reaches — closing the parser
+/// differential a crafted image URL (e.g. `https://evil.com\@uploads.linear.app/`,
+/// which reqwest routes to `evil.com`) could otherwise exploit to exfiltrate it.
+fn url_is_linear(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(images::is_linear_host))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::StateType;
+
+    #[test]
+    fn key_attached_only_for_real_linear_hosts() {
+        assert!(url_is_linear("https://uploads.linear.app/a/b.png"));
+        assert!(url_is_linear("https://linear.app/x.png"));
+        assert!(url_is_linear("https://UPLOADS.LINEAR.APP/x.png?sig=1"));
+        // userinfo "uploads.linear.app@evil.com" → real host is evil.com.
+        assert!(!url_is_linear("https://uploads.linear.app@evil.com/x.png"));
+        // Backslash is normalized to "/" for http(s): real host is evil.com,
+        // even though a naive parser sees a linear.app suffix after the '@'.
+        assert!(!url_is_linear("https://evil.com\\@uploads.linear.app/x.png"));
+        // Look-alikes and third-party hosts.
+        assert!(!url_is_linear("https://linear.app.evil.com/x.png"));
+        assert!(!url_is_linear("https://evil.com/uploads.linear.app/x.png"));
+        assert!(!url_is_linear("https://i.imgur.com/x.png"));
+        // Garbage / non-absolute URLs never get the key.
+        assert!(!url_is_linear("not a url"));
+        assert!(!url_is_linear("/local/path.png"));
+    }
 
     #[test]
     fn my_issues_default_filters_on_me_and_open_states() {

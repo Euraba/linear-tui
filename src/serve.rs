@@ -124,7 +124,9 @@ async fn dispatch(
         }),
         "viewer" => serde_json::to_value(client.viewer().await?)?,
         "teams" => serde_json::to_value(client.teams().await?)?,
-        "team_states" => serde_json::to_value(client.team_states(&req_str(params, "team_id")?).await?)?,
+        "team_states" => {
+            serde_json::to_value(client.team_states(&req_str(params, "team_id")?).await?)?
+        }
         "team_projects" => {
             serde_json::to_value(client.team_projects(&req_str(params, "team_id")?).await?)?
         }
@@ -137,7 +139,13 @@ async fn dispatch(
             let project_id = opt_str(params, "project_id");
             let vid = ensure_viewer(client, viewer_id).await?;
             let issues = client
-                .issues(&team_id, view, &vid, project_id.as_deref(), &crate::models::Filters::default())
+                .issues(
+                    &team_id,
+                    view,
+                    &vid,
+                    project_id.as_deref(),
+                    &crate::models::Filters::default(),
+                )
                 .await?;
             serde_json::to_value(issues)?
         }
@@ -152,7 +160,10 @@ async fn dispatch(
         }
         "set_assignee" => {
             client
-                .set_assignee(&req_str(params, "issue_id")?, opt_str(params, "assignee_id").as_deref())
+                .set_assignee(
+                    &req_str(params, "issue_id")?,
+                    opt_str(params, "assignee_id").as_deref(),
+                )
                 .await?;
             json!({ "success": true })
         }

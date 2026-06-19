@@ -255,7 +255,10 @@ impl Filters {
             CreatorFilter::Person { id, .. } => format!("u:{id}"),
         };
         let state = self.state.map(|s| s.api()).unwrap_or("any");
-        let priority = self.priority.map(|p| p.to_string()).unwrap_or_else(|| "any".into());
+        let priority = self
+            .priority
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "any".into());
         format!("a={assignee},c={creator},s={state},p={priority}")
     }
 
@@ -321,15 +324,27 @@ mod tests {
         assert!(f.is_active());
         let sig = f.signature();
         assert!(sig.contains("a=u:u1"), "{sig}");
-        assert!(sig.contains("c=me") && sig.contains("s=started") && sig.contains("p=1"), "{sig}");
+        assert!(
+            sig.contains("c=me") && sig.contains("s=started") && sig.contains("p=1"),
+            "{sig}"
+        );
         let sum = f.summary();
-        assert!(sum.contains("@tanay") && sum.contains("by:me") && sum.contains("In Progress"), "{sum}");
+        assert!(
+            sum.contains("@tanay") && sum.contains("by:me") && sum.contains("In Progress"),
+            "{sum}"
+        );
     }
 
     #[test]
     fn distinct_filters_get_distinct_signatures() {
-        let a = Filters { priority: Some(1), ..Default::default() };
-        let b = Filters { priority: Some(2), ..Default::default() };
+        let a = Filters {
+            priority: Some(1),
+            ..Default::default()
+        };
+        let b = Filters {
+            priority: Some(2),
+            ..Default::default()
+        };
         assert_ne!(a.signature(), b.signature());
         assert_ne!(a.signature(), Filters::default().signature());
     }

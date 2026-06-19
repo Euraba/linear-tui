@@ -101,7 +101,12 @@ async fn dispatch(
 
 // ----- Commands ----------------------------------------------------------
 
-async fn issues_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json: bool) -> Result<()> {
+async fn issues_cmd(
+    client: &LinearClient,
+    cfg: &Config,
+    args: &ParsedArgs,
+    json: bool,
+) -> Result<()> {
     let view = if args.bools.contains("mine") {
         View::MyIssues
     } else {
@@ -132,7 +137,11 @@ async fn issues_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json
             let proj = projects
                 .iter()
                 .find(|p| p.name.eq_ignore_ascii_case(name))
-                .or_else(|| projects.iter().find(|p| p.name.to_lowercase().contains(&nl)))
+                .or_else(|| {
+                    projects
+                        .iter()
+                        .find(|p| p.name.to_lowercase().contains(&nl))
+                })
                 .ok_or_else(|| anyhow!("no project matching `{name}` in team {key}"))?;
             Some(proj.id.clone())
         }
@@ -140,7 +149,13 @@ async fn issues_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json
     };
 
     let issues = client
-        .list_issues(view, &viewer_id, team_key.as_deref(), project_id.as_deref(), limit)
+        .list_issues(
+            view,
+            &viewer_id,
+            team_key.as_deref(),
+            project_id.as_deref(),
+            limit,
+        )
         .await?;
     if json {
         print_json(&issues)?;
@@ -150,7 +165,12 @@ async fn issues_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json
     Ok(())
 }
 
-async fn search_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json: bool) -> Result<()> {
+async fn search_cmd(
+    client: &LinearClient,
+    cfg: &Config,
+    args: &ParsedArgs,
+    json: bool,
+) -> Result<()> {
     let term = args.pos.join(" ");
     if term.trim().is_empty() {
         return Err(anyhow!("usage: linear-tui search <text...>"));
@@ -271,7 +291,10 @@ async fn state_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Resu
     let states = client.team_states(&team_id).await?;
     let st = match_state(&states, &wanted).ok_or_else(|| {
         let names: Vec<&str> = states.iter().map(|s| s.name.as_str()).collect();
-        anyhow!("no state matching `{wanted}`. Available: {}", names.join(", "))
+        anyhow!(
+            "no state matching `{wanted}`. Available: {}",
+            names.join(", ")
+        )
     })?;
     client.set_state(&uuid, &st.id).await?;
     if json {
@@ -312,7 +335,12 @@ async fn assign_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Res
     Ok(())
 }
 
-async fn states_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json: bool) -> Result<()> {
+async fn states_cmd(
+    client: &LinearClient,
+    cfg: &Config,
+    args: &ParsedArgs,
+    json: bool,
+) -> Result<()> {
     let team = resolve_team(client, &require_team(cfg, args)?).await?;
     let states = client.team_states(&team.id).await?;
     if json {
@@ -325,7 +353,12 @@ async fn states_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json
     Ok(())
 }
 
-async fn projects_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json: bool) -> Result<()> {
+async fn projects_cmd(
+    client: &LinearClient,
+    cfg: &Config,
+    args: &ParsedArgs,
+    json: bool,
+) -> Result<()> {
     let team = resolve_team(client, &require_team(cfg, args)?).await?;
     let projects = client.team_projects(&team.id).await?;
     if json {
@@ -343,7 +376,12 @@ async fn projects_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, js
     Ok(())
 }
 
-async fn members_cmd(client: &LinearClient, cfg: &Config, args: &ParsedArgs, json: bool) -> Result<()> {
+async fn members_cmd(
+    client: &LinearClient,
+    cfg: &Config,
+    args: &ParsedArgs,
+    json: bool,
+) -> Result<()> {
     let team = resolve_team(client, &require_team(cfg, args)?).await?;
     let members = client.team_members(&team.id).await?;
     if json {
@@ -377,9 +415,9 @@ async fn resolve_member(client: &LinearClient, team_id: &str, name: &str) -> Res
         .iter()
         .find(|m| m.label().eq_ignore_ascii_case(name) || m.name.eq_ignore_ascii_case(name))
         .or_else(|| {
-            members
-                .iter()
-                .find(|m| m.label().to_lowercase().contains(&nl) || m.name.to_lowercase().contains(&nl))
+            members.iter().find(|m| {
+                m.label().to_lowercase().contains(&nl) || m.name.to_lowercase().contains(&nl)
+            })
         })
         .cloned()
         .ok_or_else(|| anyhow!("no team member matching `{name}`"))
@@ -410,7 +448,9 @@ fn type_keyword(w: &str) -> Option<&'static str> {
     Some(match w {
         "done" | "complete" | "completed" | "closed" => "completed",
         "todo" | "unstarted" | "open" => "unstarted",
-        "progress" | "in progress" | "in-progress" | "inprogress" | "started" | "doing" => "started",
+        "progress" | "in progress" | "in-progress" | "inprogress" | "started" | "doing" => {
+            "started"
+        }
         "backlog" => "backlog",
         "cancel" | "canceled" | "cancelled" => "canceled",
         "triage" => "triage",
@@ -424,7 +464,11 @@ fn parse_view(s: &str) -> Result<View> {
         "active" => View::Active,
         "backlog" => View::Backlog,
         "all" => View::All,
-        other => return Err(anyhow!("unknown view `{other}` (use: my|active|backlog|all)")),
+        other => {
+            return Err(anyhow!(
+                "unknown view `{other}` (use: my|active|backlog|all)"
+            ))
+        }
     })
 }
 
@@ -601,7 +645,9 @@ mod tests {
 
     #[test]
     fn parses_positionals_flags_and_bools() {
-        let a = ParsedArgs::parse(&argv(&["ENG-1", "hello", "world", "--team", "ENG", "--json"]));
+        let a = ParsedArgs::parse(&argv(&[
+            "ENG-1", "hello", "world", "--team", "ENG", "--json",
+        ]));
         assert_eq!(a.pos, ["ENG-1", "hello", "world"]);
         assert_eq!(a.flag("team"), Some("ENG"));
         assert!(a.bools.contains("json"));
@@ -624,9 +670,24 @@ mod tests {
     #[test]
     fn state_matches_by_name_then_type() {
         let states = vec![
-            WorkflowState { id: "1".into(), name: "Todo".into(), kind: "unstarted".into(), color: None },
-            WorkflowState { id: "2".into(), name: "In Progress".into(), kind: "started".into(), color: None },
-            WorkflowState { id: "3".into(), name: "Done".into(), kind: "completed".into(), color: None },
+            WorkflowState {
+                id: "1".into(),
+                name: "Todo".into(),
+                kind: "unstarted".into(),
+                color: None,
+            },
+            WorkflowState {
+                id: "2".into(),
+                name: "In Progress".into(),
+                kind: "started".into(),
+                color: None,
+            },
+            WorkflowState {
+                id: "3".into(),
+                name: "Done".into(),
+                kind: "completed".into(),
+                color: None,
+            },
         ];
         assert_eq!(match_state(&states, "in progress").unwrap().id, "2"); // exact (ci)
         assert_eq!(match_state(&states, "prog").unwrap().id, "2"); // substring

@@ -391,12 +391,18 @@ impl App {
         if let Some(team) = self.selected_team().cloned() {
             let view = self.current_view;
             let project_id = self.selected_project_id();
-            let key = cache::list_key(&team.id, view, project_id.as_deref(), &self.filters.signature());
+            let key = cache::list_key(
+                &team.id,
+                view,
+                project_id.as_deref(),
+                &self.filters.signature(),
+            );
             // Remember the current issue so we can re-select it once the new
             // list arrives (no-op if it's not in the new list).
             self.pending_select = self.selected_issue().map(|i| i.id.clone());
             self.issues_epoch += 1;
-            self.pending_list_keys.insert(self.issues_epoch, key.clone());
+            self.pending_list_keys
+                .insert(self.issues_epoch, key.clone());
             self.status = format!("Loading {} · {}…", team.key, view.label());
             // Stale-while-revalidate: show the cached list instantly if we have
             // one, then refresh over the network below.
@@ -431,11 +437,7 @@ impl App {
         self.rebuild_visible();
         // Selection is an index into the visible list, so resolve `keep` there.
         let idx = keep
-            .and_then(|id| {
-                self.visible
-                    .iter()
-                    .position(|&i| self.issues[i].id == id)
-            })
+            .and_then(|id| self.visible.iter().position(|&i| self.issues[i].id == id))
             .or_else(|| (!self.visible.is_empty()).then_some(0));
         self.issues_state.select(idx);
         self.status = format!("{} issue(s) · {}", self.issues.len(), view.label());
@@ -547,7 +549,8 @@ impl App {
         if !self.cache_mode.uses_memory() {
             return;
         }
-        self.issue_list_cache.insert(key.to_string(), issues.to_vec());
+        self.issue_list_cache
+            .insert(key.to_string(), issues.to_vec());
         if self.cache_mode.uses_disk() {
             cache::write_list(key, issues);
         }
@@ -590,7 +593,10 @@ impl App {
     /// React to a keystroke in the input bar: the filter re-filters live; the
     /// find just re-highlights (the renderer reads the live buffer).
     fn after_edit_change(&mut self) {
-        if matches!(self.editing.as_ref().map(|e| e.mode), Some(EditMode::Filter)) {
+        if matches!(
+            self.editing.as_ref().map(|e| e.mode),
+            Some(EditMode::Filter)
+        ) {
             self.rebuild_visible();
             // fzf-style: snap to the top of the narrowed list.
             self.issues_state
@@ -844,7 +850,10 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('v') => {
                 self.overlay = Overlay::None;
             }
-            KeyCode::Right | KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n')
+            KeyCode::Right
+            | KeyCode::Down
+            | KeyCode::Char('j')
+            | KeyCode::Char('n')
             | KeyCode::Char('l')
                 if len > 0 =>
             {
@@ -852,7 +861,10 @@ impl App {
                     index: (index + 1) % len,
                 };
             }
-            KeyCode::Left | KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p')
+            KeyCode::Left
+            | KeyCode::Up
+            | KeyCode::Char('k')
+            | KeyCode::Char('p')
             | KeyCode::Char('h')
                 if len > 0 =>
             {
@@ -1060,10 +1072,14 @@ impl App {
     /// then refresh the list so filtering is live.
     fn cycle_filter(&mut self, dir: i32) {
         match FilterRow::ALL[self.filter_cursor] {
-            FilterRow::Assignee => self.filters.assignee = cycle_assignee(&self.filters.assignee, dir),
+            FilterRow::Assignee => {
+                self.filters.assignee = cycle_assignee(&self.filters.assignee, dir)
+            }
             FilterRow::Creator => self.filters.creator = cycle_creator(&self.filters.creator, dir),
             FilterRow::State => self.filters.state = cycle_state(self.filters.state, dir),
-            FilterRow::Priority => self.filters.priority = cycle_priority(self.filters.priority, dir),
+            FilterRow::Priority => {
+                self.filters.priority = cycle_priority(self.filters.priority, dir)
+            }
         }
         self.reload_issues();
     }
@@ -1092,7 +1108,10 @@ impl App {
         match kind {
             InputKind::Comment => {
                 if let Some(issue_id) = self.current_issue_id() {
-                    self.send(Request::AddComment { issue_id, body: text });
+                    self.send(Request::AddComment {
+                        issue_id,
+                        body: text,
+                    });
                 }
             }
             InputKind::CreateIssue => {
@@ -1200,11 +1219,13 @@ impl App {
                     KeyCode::Esc => {
                         // Filter-field pickers return to the filter overlay so
                         // you can keep editing; other pickers just close.
-                        let to_filter = matches!(
-                            kind,
-                            PickerKind::FilterAssignee | PickerKind::FilterCreator
-                        );
-                        self.overlay = if to_filter { Overlay::Filter } else { Overlay::None };
+                        let to_filter =
+                            matches!(kind, PickerKind::FilterAssignee | PickerKind::FilterCreator);
+                        self.overlay = if to_filter {
+                            Overlay::Filter
+                        } else {
+                            Overlay::None
+                        };
                     }
                     KeyCode::Enter => self.confirm_picker(),
                     KeyCode::Down | KeyCode::Char('j') => move_sel(state, len, 1),
@@ -1320,7 +1341,10 @@ impl App {
                 match parent {
                     Some((parent_id, parent_label)) => {
                         self.overlay = Overlay::Input {
-                            kind: InputKind::CreateSubIssue { parent_id, parent_label },
+                            kind: InputKind::CreateSubIssue {
+                                parent_id,
+                                parent_label,
+                            },
                             buffer: String::new(),
                         };
                     }
@@ -1432,13 +1456,12 @@ impl App {
                 }
             }
             KeyCode::Char('a') => self.load_members_for(MemberTarget::SetAssignee),
-            KeyCode::Char('m')
-                if self.detail_target.is_some() => {
-                    self.overlay = Overlay::Input {
-                        kind: InputKind::Comment,
-                        buffer: String::new(),
-                    };
-                }
+            KeyCode::Char('m') if self.detail_target.is_some() => {
+                self.overlay = Overlay::Input {
+                    kind: InputKind::Comment,
+                    buffer: String::new(),
+                };
+            }
             _ => {}
         }
     }
@@ -1463,13 +1486,12 @@ impl App {
                 }
             }
             KeyCode::Char('a') => self.load_members_for(MemberTarget::SetAssignee),
-            KeyCode::Char('m')
-                if self.detail_target.is_some() => {
-                    self.overlay = Overlay::Input {
-                        kind: InputKind::Comment,
-                        buffer: String::new(),
-                    };
-                }
+            KeyCode::Char('m') if self.detail_target.is_some() => {
+                self.overlay = Overlay::Input {
+                    kind: InputKind::Comment,
+                    buffer: String::new(),
+                };
+            }
             _ => {}
         }
     }
@@ -1593,7 +1615,10 @@ mod tests {
         assert_eq!(cycle_assignee(&Any, -1), Unassigned);
         // A specific person isn't reachable by cycling — stepping off lands on
         // a neighbouring preset.
-        let p = Person { id: "x".into(), label: "tanay".into() };
+        let p = Person {
+            id: "x".into(),
+            label: "tanay".into(),
+        };
         assert_eq!(cycle_assignee(&p, 1), Any);
         assert_eq!(cycle_assignee(&p, -1), Unassigned);
     }

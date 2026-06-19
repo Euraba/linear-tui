@@ -6,9 +6,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{
-        Block, Borders, Clear, List, ListItem, Paragraph, Wrap,
-    },
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 use ratatui_image::{Resize, StatefulImage};
@@ -60,9 +58,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Overlay::Settings => draw_settings(f, app.cache_mode),
         Overlay::Filter => draw_filter(f, &app.filters, app.filter_cursor),
         Overlay::Input { kind, buffer } => draw_input(f, kind, buffer),
-        Overlay::Picker { kind, items, state } => {
-            draw_picker(f, *kind, items, &mut state.clone())
-        }
+        Overlay::Picker { kind, items, state } => draw_picker(f, *kind, items, &mut state.clone()),
     }
 
     // The image viewer needs `&mut App` (rendering mutates the cached protocol),
@@ -80,12 +76,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// A block whose border lights up when its pane has focus.
 fn pane_block(title: &str, focused: bool) -> Block<'_> {
     let border_style = if focused {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
     let title_style = if focused {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Gray)
     };
@@ -96,7 +96,10 @@ fn pane_block(title: &str, focused: bool) -> Block<'_> {
 }
 
 fn selected_style() -> Style {
-    Style::default().bg(ACCENT).fg(Color::White).add_modifier(Modifier::BOLD)
+    Style::default()
+        .bg(ACCENT)
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD)
 }
 
 fn draw_teams(f: &mut Frame, app: &mut App, area: Rect) {
@@ -126,8 +129,10 @@ fn draw_views(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_projects(f: &mut Frame, app: &mut App, area: Rect) {
-    let mut items: Vec<ListItem> =
-        vec![ListItem::new(Span::styled("— All projects —", Style::default().fg(Color::Gray)))];
+    let mut items: Vec<ListItem> = vec![ListItem::new(Span::styled(
+        "— All projects —",
+        Style::default().fg(Color::Gray),
+    ))];
     items.extend(app.projects.iter().map(|p| {
         let glyph = match p.state.as_deref() {
             Some("completed") => "✓ ",
@@ -248,7 +253,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         if let Some(p) = &d.parent {
             lines.push(Line::from(vec![
                 Span::styled("↑ parent  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{} ", p.identifier), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{} ", p.identifier),
+                    Style::default().fg(Color::Yellow),
+                ),
                 Span::raw(p.title.clone()),
                 Span::styled("   (p)", Style::default().fg(Color::DarkGray)),
             ]));
@@ -278,7 +286,11 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             )));
             for c in &d.children {
-                let glyph = c.state.as_ref().map(|s| state_glyph(&s.kind)).unwrap_or(' ');
+                let glyph = c
+                    .state
+                    .as_ref()
+                    .map(|s| state_glyph(&s.kind))
+                    .unwrap_or(' ');
                 let gcolor = c
                     .state
                     .as_ref()
@@ -286,7 +298,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                     .unwrap_or(ACCENT);
                 lines.push(Line::from(vec![
                     Span::styled(format!("  {glyph} "), Style::default().fg(gcolor)),
-                    Span::styled(format!("{} ", c.identifier), Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{} ", c.identifier),
+                        Style::default().fg(Color::Yellow),
+                    ),
                     Span::raw(c.title.clone()),
                 ]));
             }
@@ -312,7 +327,9 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{who} "),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(when, Style::default().fg(Color::DarkGray)),
             ]));
@@ -398,9 +415,14 @@ fn push_header(
     lines.push(Line::from(vec![
         Span::styled(
             format!("{identifier} "),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(title.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            title.to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
     ]));
     lines.push(Line::from(vec![
         Span::styled("state: ", Style::default().fg(Color::DarkGray)),
@@ -418,7 +440,9 @@ fn push_header(
     if let Some(url) = url {
         lines.push(Line::from(Span::styled(
             url.to_string(),
-            Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED),
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::UNDERLINED),
         )));
     }
     lines.push(Line::from(""));
@@ -484,10 +508,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().bg(ACCENT).fg(Color::White),
             ),
             Span::raw("  "),
-            Span::styled(
-                "n/N:jump  Esc:clear",
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("n/N:jump  Esc:clear", Style::default().fg(Color::DarkGray)),
         ]);
         f.render_widget(Paragraph::new(line), area);
         return;
@@ -613,7 +634,11 @@ fn draw_image_viewer(f: &mut Frame, app: &mut App, index: usize) {
 
     match url.as_deref().and_then(|u| app.images.get_mut(u)) {
         Some(ImageState::Ready(protocol)) => {
-            f.render_stateful_widget(StatefulImage::new().resize(Resize::Fit(None)), inner, protocol);
+            f.render_stateful_widget(
+                StatefulImage::new().resize(Resize::Fit(None)),
+                inner,
+                protocol,
+            );
         }
         Some(ImageState::Failed(err)) => {
             let msg = vec![
@@ -633,7 +658,11 @@ fn draw_image_viewer(f: &mut Frame, app: &mut App, index: usize) {
         }
         _ => {
             // Still loading, or the index fell out of range after a reload.
-            let msg = if count == 0 { "  No images." } else { "  Loading image…" };
+            let msg = if count == 0 {
+                "  No images."
+            } else {
+                "  Loading image…"
+            };
             f.render_widget(
                 Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray))),
                 inner,
@@ -663,7 +692,9 @@ fn draw_settings(f: &mut Frame, mode: CacheMode) {
     for m in CacheMode::ALL {
         let current = m == mode;
         let style = if current {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -687,7 +718,10 @@ fn draw_settings(f: &mut Frame, mode: CacheMode) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green))
-        .title(Span::styled(" Settings ", Style::default().fg(Color::Green)));
+        .title(Span::styled(
+            " Settings ",
+            Style::default().fg(Color::Green),
+        ));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -739,7 +773,9 @@ fn draw_filter(f: &mut Frame, filters: &Filters, cursor: usize) {
             Style::default().fg(Color::Gray)
         };
         let value_style = if selected {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -802,14 +838,12 @@ fn draw_help(f: &mut Frame) {
             Style::default().fg(Color::DarkGray),
         )),
     ];
-    let para = Paragraph::new(lines)
-        .alignment(Alignment::Left)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green))
-                .title(" Help "),
-        );
+    let para = Paragraph::new(lines).alignment(Alignment::Left).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green))
+            .title(" Help "),
+    );
     f.render_widget(para, area.inner(Margin::new(0, 0)));
 }
 
@@ -862,8 +896,5 @@ fn priority_label(p: i64) -> &'static str {
 
 /// Trim an ISO-8601 timestamp down to `YYYY-MM-DD HH:MM`.
 fn short_date(s: &str) -> String {
-    s.replace('T', " ")
-        .chars()
-        .take(16)
-        .collect::<String>()
+    s.replace('T', " ").chars().take(16).collect::<String>()
 }

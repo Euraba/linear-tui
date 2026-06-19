@@ -5,10 +5,35 @@ edition = "2021"
 description = "A TUI client for Linear.app, modeled after slack-tui"
 license = "MIT"
 default-run = "linear-tui"
+authors = ["Eusebiu-Rares Balasescu <rares@getbesty.ai>"]
+repository = "https://github.com/Euraba/linear-tui"
+homepage = "https://github.com/Euraba/linear-tui"
+readme = "README.md"
+keywords = ["linear", "tui", "cli", "terminal", "issues"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "linear-tui"
 path = "src/main.rs"
+
+# `cargo deb` packaging metadata (Debian/Ubuntu .deb). Runtime deps are
+# auto-detected ($auto) from the binary's dynamic links — only glibc/libgcc,
+# since TLS is rustls and Lua is statically vendored.
+[package.metadata.deb]
+maintainer = "Eusebiu-Rares Balasescu <rares@getbesty.ai>"
+copyright = "2026, Eusebiu-Rares Balasescu"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+A fast, keyboard-driven terminal client for Linear.app: browse, search, filter,
+and triage issues, with a scriptable one-shot CLI and a headless JSON-RPC mode \
+for the Neovim plugin."""
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/linear-tui", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/linear-tui/README.md", "644"],
+    ["config.example.lua", "usr/share/doc/linear-tui/config.example.lua", "644"],
+]
 
 [dependencies]
 ratatui = "0.29"

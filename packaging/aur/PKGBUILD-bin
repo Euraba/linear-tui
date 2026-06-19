@@ -1,0 +1,25 @@
+# Maintainer: Eusebiu-Rares Balasescu <rares@getbesty.ai>
+# Prebuilt-binary package: installs the release tarball from GitHub instead of
+# compiling. Publish this as the separate AUR package "linear-tui-bin".
+pkgname=linear-tui-bin
+_pkgname=linear-tui
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A keyboard-driven TUI + CLI client for Linear.app (prebuilt binary)"
+arch=('x86_64')
+url="https://github.com/Euraba/linear-tui"
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+_dir="$_pkgname-$pkgver-x86_64-unknown-linux-gnu"
+source=("$_dir.tar.gz::$url/releases/download/v$pkgver/$_dir.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$_dir"
+  install -Dm755 "$_pkgname" "$pkgdir/usr/bin/$_pkgname"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
+  install -Dm644 config.example.lua "$pkgdir/usr/share/doc/$_pkgname/config.example.lua"
+}

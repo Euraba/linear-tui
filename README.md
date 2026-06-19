@@ -51,24 +51,27 @@ Config is searched in this order: `$LINEAR_TUI_CONFIG`, then
 
 ## Keybindings
 
-| Key            | Action                              |
-| -------------- | ----------------------------------- |
-| `Tab` / `S-Tab`| cycle pane focus                    |
-| `j`/`k`, ↑/↓   | move selection / scroll detail      |
-| `Enter`        | focus the issue list / detail pane  |
-| `/`            | find — jump between matches (`n`/`N`)|
-| `f`            | filter the issue list to matches    |
-| `p`            | go to parent issue                  |
-| `c`            | open a sub-issue (`⌫` to go back)   |
-| `v`            | view embedded images (`n`/`p` cycle)|
-| `,`            | open settings (cache mode)          |
-| `s`            | change issue state                  |
-| `a`            | change assignee                     |
-| `m`            | add a comment                       |
-| `n`            | create a new issue (in current team)|
-| `r`            | reload current issue list           |
-| `?`            | toggle help                         |
-| `q` / `Ctrl-C` | quit                                |
+| Key            | Action                                  |
+| -------------- | --------------------------------------- |
+| `h` / `l`      | move focus left / right between panes   |
+| `Tab` / `S-Tab`| same (cycle pane focus)                 |
+| `j`/`k`, ↑/↓   | move selection / scroll within a pane   |
+| `Enter`        | focus the issue list / detail pane      |
+| `/`            | find — jump between matches (`n`/`N`)    |
+| `f`            | filter the issue list to matches (text) |
+| `F`            | filter by assignee/creator/state/priority |
+| `p`            | go to parent issue                      |
+| `c`            | open a sub-issue (`⌫` to go back)       |
+| `v`            | view embedded images (`n`/`p` cycle)    |
+| `,`            | open settings (cache mode)              |
+| `s`            | change issue state                      |
+| `a`            | change assignee                         |
+| `m`            | add a comment                           |
+| `n`            | create a new issue (in current team)    |
+| `N`            | create a sub-issue under the open issue |
+| `r`            | reload current issue list               |
+| `?`            | toggle help                             |
+| `q` / `Ctrl-C` | quit                                    |
 
 ## Views, teams & projects
 
@@ -102,6 +105,24 @@ query has an uppercase letter):
 
 Both match across an issue's identifier, title, assignee and state. The filter
 persists as you switch views/teams (press `Esc` in the list to drop it).
+
+### `F` — server-side filter
+
+While `/` and `f` filter the *loaded* list by text, **`F`** opens a filter editor
+that queries Linear directly — so you can find issues that aren't in the current
+view at all (e.g. *created by me*, *assigned to someone else*):
+
+- **Assignee** — anyone, me, unassigned, or a specific person (`Enter` opens a
+  person picker).
+- **Creator** — anyone, me, or a specific person.
+- **State** — any, or a workflow-state type (Todo / In Progress / Done / …).
+- **Priority** — any, Urgent / High / Medium / Low / No priority.
+
+`j`/`k` move between rows, `h`/`l` change a value (filters apply live), `Enter`
+picks a person for the assignee/creator rows, `c` clears everything, `Esc`/`F`
+closes. Active filters combine with the selected view/project and show in the
+issues-pane title; an explicit assignee/state overrides the view's own (so
+*My Issues* + *assignee: someone else* shows that person's issues).
 
 ## Sub-issues & parents
 

@@ -29,9 +29,14 @@ fn hash_hex(input: &str) -> String {
     out
 }
 
-/// Stable cache key for an issue list: team + view + optional project filter.
-pub fn list_key(team_id: &str, view: View, project_id: Option<&str>) -> String {
-    format!("{team_id}|{}|{}", view.label(), project_id.unwrap_or("-"))
+/// Stable cache key for an issue list: team + view + optional project + the
+/// active filter signature (so a filtered list never overwrites the plain one).
+pub fn list_key(team_id: &str, view: View, project_id: Option<&str>, filter_sig: &str) -> String {
+    format!(
+        "{team_id}|{}|{}|{filter_sig}",
+        view.label(),
+        project_id.unwrap_or("-")
+    )
 }
 
 fn detail_path(issue_id: &str) -> Option<PathBuf> {

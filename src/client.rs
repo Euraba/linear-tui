@@ -8,7 +8,10 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use crate::images;
-use crate::models::{Issue, IssueDetail, Project, Team, User, View, WorkflowState};
+use crate::models::{
+    AssigneeFilter, CreatorFilter, Filters, Issue, IssueDetail, Project, Team, User, View,
+    WorkflowState,
+};
 
 const ENDPOINT: &str = "https://api.linear.app/graphql";
 
@@ -134,26 +137,19 @@ impl LinearClient {
     }
 
     /// Issues for a team filtered according to the chosen [`View`], optionally
-    /// narrowed to a single project. View and project filters combine (AND).
+    /// narrowed to a single project and the extra [`Filters`]. Everything
+    /// combines (AND); an explicit assignee/state filter *overrides* the view's
+    /// own assignee/state constraint (so "My Issues + assignee:tanay" shows
+    /// tanay's, not an impossible intersection).
     pub async fn issues(
         &self,
         team_id: &str,
         view: View,
         viewer_id: &str,
         project_id: Option<&str>,
+        filters: &Filters,
     ) -> Result<Vec<Issue>> {
-        let mut filter = match view {
-            View::Active => json!({ "state": { "type": { "in": ["unstarted", "started"] } } }),
-            View::Backlog => json!({ "state": { "type": { "eq": "backlog" } } }),
-            View::MyIssues => json!({
-                "assignee": { "id": { "eq": viewer_id } },
-                "state": { "type": { "nin": ["completed", "canceled"] } }
-            }),
-            View::All => json!({}),
-        };
-        if let Some(pid) = project_id {
-            filter["project"] = json!({ "id": { "eq": pid } });
-        }
+        let filter = build_issue_filter(view, viewer_id, project_id, filters);
 
         let q = r#"
             query($id: String!, $filter: IssueFilter, $n: Int!) {
@@ -419,5 +415,119 @@ impl LinearClient {
             .ok_or_else(|| anyhow!("issue `{id}` missing team"))?
             .to_string();
         Ok((uuid, team))
+    }
+}
+
+/// Build the `IssueFilter` for [`LinearClient::issues`]: the view's baseline,
+/// the optional project, and the extra [`Filters`]. An explicit assignee/state
+/// filter overrides the view's own constraint on that dimension; creator and
+/// priority are purely additive.
+fn build_issue_filter(
+    view: View,
+    viewer_id: &str,
+    project_id: Option<&str>,
+    filters: &Filters,
+) -> Value {
+    let override_assignee = filters.assignee != AssigneeFilter::Any;
+    let override_state = filters.state.is_some();
+
+    let mut filter = json!({});
+    match view {
+        View::Active => {
+            if !override_state {
+                filter["state"] = json!({ "type": { "in": ["unstarted", "started"] } });
+            }
+        }
+        View::Backlog => {
+            if !override_state {
+                filter["state"] = json!({ "type": { "eq": "backlog" } });
+            }
+        }
+        View::MyIssues => {
+            if !override_assignee {
+                filter["assignee"] = json!({ "id": { "eq": viewer_id } });
+            }
+            if !override_state {
+                filter["state"] = json!({ "type": { "nin": ["completed", "canceled"] } });
+            }
+        }
+        View::All => {}
+    }
+
+    match &filters.assignee {
+        AssigneeFilter::Any => {}
+        AssigneeFilter::Me => filter["assignee"] = json!({ "id": { "eq": viewer_id } }),
+        AssigneeFilter::Unassigned => filter["assignee"] = json!({ "null": true }),
+        AssigneeFilter::Person { id, .. } => filter["assignee"] = json!({ "id": { "eq": id } }),
+    }
+    match &filters.creator {
+        CreatorFilter::Any => {}
+        CreatorFilter::Me => filter["creator"] = json!({ "id": { "eq": viewer_id } }),
+        CreatorFilter::Person { id, .. } => filter["creator"] = json!({ "id": { "eq": id } }),
+    }
+    if let Some(state) = filters.state {
+        filter["state"] = json!({ "type": { "eq": state.api() } });
+    }
+    if let Some(priority) = filters.priority {
+        filter["priority"] = json!({ "eq": priority });
+    }
+    if let Some(pid) = project_id {
+        filter["project"] = json!({ "id": { "eq": pid } });
+    }
+    filter
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::StateType;
+
+    #[test]
+    fn my_issues_default_filters_on_me_and_open_states() {
+        let f = build_issue_filter(View::MyIssues, "VIEWER", None, &Filters::default());
+        assert_eq!(f["assignee"], json!({ "id": { "eq": "VIEWER" } }));
+        assert_eq!(f["state"], json!({ "type": { "nin": ["completed", "canceled"] } }));
+    }
+
+    #[test]
+    fn explicit_assignee_overrides_my_issues() {
+        // "My Issues" + assignee:tanay should show tanay's, not me-AND-tanay.
+        let filters = Filters {
+            assignee: AssigneeFilter::Person {
+                id: "TANAY".into(),
+                label: "tanay".into(),
+            },
+            ..Default::default()
+        };
+        let f = build_issue_filter(View::MyIssues, "VIEWER", None, &filters);
+        assert_eq!(f["assignee"], json!({ "id": { "eq": "TANAY" } }));
+        // The view's open-states default still applies.
+        assert_eq!(f["state"], json!({ "type": { "nin": ["completed", "canceled"] } }));
+    }
+
+    #[test]
+    fn creator_me_and_priority_are_additive_on_all() {
+        let filters = Filters {
+            creator: CreatorFilter::Me,
+            priority: Some(2),
+            ..Default::default()
+        };
+        let f = build_issue_filter(View::All, "VIEWER", None, &filters);
+        assert_eq!(f["creator"], json!({ "id": { "eq": "VIEWER" } }));
+        assert_eq!(f["priority"], json!({ "eq": 2 }));
+        assert!(f.get("assignee").is_none());
+    }
+
+    #[test]
+    fn unassigned_and_state_override() {
+        let filters = Filters {
+            assignee: AssigneeFilter::Unassigned,
+            state: Some(StateType::Started),
+            ..Default::default()
+        };
+        let f = build_issue_filter(View::MyIssues, "VIEWER", Some("PROJ"), &filters);
+        assert_eq!(f["assignee"], json!({ "null": true }));
+        assert_eq!(f["state"], json!({ "type": { "eq": "started" } }));
+        assert_eq!(f["project"], json!({ "id": { "eq": "PROJ" } }));
     }
 }

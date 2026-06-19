@@ -9,7 +9,10 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache;
 use crate::images::{self, ImageState};
-use crate::models::{Issue, IssueDetail, Project, Team, User, View, WorkflowState};
+use crate::models::{
+    AssigneeFilter, CreatorFilter, Filters, Issue, IssueDetail, Project, StateType, Team, User,
+    View, WorkflowState,
+};
 use crate::search;
 use crate::settings::{CacheMode, Settings};
 use crate::worker::{Request, Response};
@@ -67,6 +70,22 @@ pub enum PickerKind {
     Assignee,
     /// Choose a sub-issue to open (navigates rather than mutating).
     SubIssue,
+    /// Pick a person for the assignee filter (sets state, doesn't mutate).
+    FilterAssignee,
+    /// Pick a person for the creator filter.
+    FilterCreator,
+}
+
+/// What a pending team-members fetch is for, so the [`Response::Members`]
+/// handler knows which picker to open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberTarget {
+    /// Reassign the open issue (the `a` key).
+    SetAssignee,
+    /// Set the assignee filter.
+    FilterAssignee,
+    /// Set the creator filter.
+    FilterCreator,
 }
 
 /// The active modal overlay, if any.
@@ -89,7 +108,27 @@ pub enum Overlay {
     },
     /// Runtime settings panel (currently the cache mode).
     Settings,
+    /// Issue-list filter editor (assignee / creator / state / priority).
+    Filter,
     Help,
+}
+
+/// Rows of the [`Overlay::Filter`] editor, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterRow {
+    Assignee,
+    Creator,
+    State,
+    Priority,
+}
+
+impl FilterRow {
+    pub const ALL: [FilterRow; 4] = [
+        FilterRow::Assignee,
+        FilterRow::Creator,
+        FilterRow::State,
+        FilterRow::Priority,
+    ];
 }
 
 /// Which context a `/` find is scoped to.
@@ -136,6 +175,14 @@ pub struct App {
     /// row, so `projects_state` index 0 means "no project filter".
     pub projects: Vec<Project>,
     pub projects_state: ListState,
+
+    /// Extra issue-list filters (assignee/creator/state/priority), layered on
+    /// top of the selected view + project. Edited in [`Overlay::Filter`].
+    pub filters: Filters,
+    /// Selected row in the filter overlay.
+    pub filter_cursor: usize,
+    /// What the in-flight `LoadMembers` will populate a picker for.
+    pub member_target: MemberTarget,
 
     pub issues: Vec<Issue>,
     pub issues_state: ListState,
@@ -221,6 +268,9 @@ impl App {
             views_state,
             projects: Vec::new(),
             projects_state,
+            filters: Filters::default(),
+            filter_cursor: 0,
+            member_target: MemberTarget::SetAssignee,
             issues: Vec::new(),
             issues_state: ListState::default(),
             visible: Vec::new(),
@@ -341,7 +391,7 @@ impl App {
         if let Some(team) = self.selected_team().cloned() {
             let view = self.current_view;
             let project_id = self.selected_project_id();
-            let key = cache::list_key(&team.id, view, project_id.as_deref());
+            let key = cache::list_key(&team.id, view, project_id.as_deref(), &self.filters.signature());
             // Remember the current issue so we can re-select it once the new
             // list arrives (no-op if it's not in the new list).
             self.pending_select = self.selected_issue().map(|i| i.id.clone());
@@ -362,6 +412,7 @@ impl App {
                 team_id: team.id,
                 view,
                 project_id,
+                filters: self.filters.clone(),
                 epoch: self.issues_epoch,
             });
         }
@@ -870,7 +921,15 @@ impl App {
                 self.images.insert(url, ImageState::Failed(error));
             }
             Response::States(states) => self.open_state_picker(states),
-            Response::Members(members) => self.open_assignee_picker(members),
+            Response::Members(members) => match self.member_target {
+                MemberTarget::SetAssignee => self.open_assignee_picker(members),
+                MemberTarget::FilterAssignee => {
+                    self.open_member_picker(members, PickerKind::FilterAssignee)
+                }
+                MemberTarget::FilterCreator => {
+                    self.open_member_picker(members, PickerKind::FilterCreator)
+                }
+            },
             Response::ActionDone { message, refresh } => {
                 self.status = message;
                 if refresh {
@@ -922,6 +981,30 @@ impl App {
         };
     }
 
+    /// Request the selected team's members, recording what the resulting picker
+    /// is for (issue reassignment vs. an assignee/creator filter).
+    fn load_members_for(&mut self, target: MemberTarget) {
+        if let Some(team) = self.selected_team().cloned() {
+            self.member_target = target;
+            self.send(Request::LoadMembers { team_id: team.id });
+        }
+    }
+
+    /// A member picker for a filter field (no "unassigned" row — use the filter
+    /// overlay's cycle for that).
+    fn open_member_picker(&mut self, members: Vec<User>, kind: PickerKind) {
+        let items: Vec<(String, String)> = members
+            .into_iter()
+            .map(|m| {
+                let label = m.label().to_string();
+                (m.id, label)
+            })
+            .collect();
+        let mut state = ListState::default();
+        state.select((!items.is_empty()).then_some(0));
+        self.overlay = Overlay::Picker { kind, items, state };
+    }
+
     fn confirm_picker(&mut self) {
         // Take ownership of the overlay so we can drop it before sending.
         let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
@@ -930,13 +1013,30 @@ impl App {
             return;
         };
         let Some(idx) = state.selected() else { return };
-        let Some((id, _label)) = items.get(idx).cloned() else {
+        let Some((id, label)) = items.get(idx).cloned() else {
             return;
         };
         // Sub-issue picks navigate rather than mutate.
         if kind == PickerKind::SubIssue {
             self.go_to_issue(id);
             return;
+        }
+        // Filter-field picks set state and return to the filter overlay; no
+        // open issue is required.
+        match kind {
+            PickerKind::FilterAssignee => {
+                self.filters.assignee = AssigneeFilter::Person { id, label };
+                self.overlay = Overlay::Filter;
+                self.reload_issues();
+                return;
+            }
+            PickerKind::FilterCreator => {
+                self.filters.creator = CreatorFilter::Person { id, label };
+                self.overlay = Overlay::Filter;
+                self.reload_issues();
+                return;
+            }
+            _ => {}
         }
         // State/assignee changes target the issue currently shown in the detail
         // pane (which may be a navigated parent/sub-issue, not the list row).
@@ -952,7 +1052,29 @@ impl App {
                 issue_id,
                 assignee_id: (!id.is_empty()).then_some(id),
             }),
-            PickerKind::SubIssue => {}
+            PickerKind::SubIssue | PickerKind::FilterAssignee | PickerKind::FilterCreator => {}
+        }
+    }
+
+    /// Advance the value of the filter row under the cursor (`dir` is +1/-1),
+    /// then refresh the list so filtering is live.
+    fn cycle_filter(&mut self, dir: i32) {
+        match FilterRow::ALL[self.filter_cursor] {
+            FilterRow::Assignee => self.filters.assignee = cycle_assignee(&self.filters.assignee, dir),
+            FilterRow::Creator => self.filters.creator = cycle_creator(&self.filters.creator, dir),
+            FilterRow::State => self.filters.state = cycle_state(self.filters.state, dir),
+            FilterRow::Priority => self.filters.priority = cycle_priority(self.filters.priority, dir),
+        }
+        self.reload_issues();
+    }
+
+    /// Enter on a filter row: person rows open a member picker to choose a
+    /// specific person; state/priority simply advance one step.
+    fn filter_enter(&mut self) {
+        match FilterRow::ALL[self.filter_cursor] {
+            FilterRow::Assignee => self.load_members_for(MemberTarget::FilterAssignee),
+            FilterRow::Creator => self.load_members_for(MemberTarget::FilterCreator),
+            FilterRow::State | FilterRow::Priority => self.cycle_filter(1),
         }
     }
 
@@ -1072,10 +1194,18 @@ impl App {
                 }
                 return;
             }
-            Overlay::Picker { state, items, .. } => {
+            Overlay::Picker { state, items, kind } => {
                 let len = items.len();
                 match key.code {
-                    KeyCode::Esc => self.overlay = Overlay::None,
+                    KeyCode::Esc => {
+                        // Filter-field pickers return to the filter overlay so
+                        // you can keep editing; other pickers just close.
+                        let to_filter = matches!(
+                            kind,
+                            PickerKind::FilterAssignee | PickerKind::FilterCreator
+                        );
+                        self.overlay = if to_filter { Overlay::Filter } else { Overlay::None };
+                    }
                     KeyCode::Enter => self.confirm_picker(),
                     KeyCode::Down | KeyCode::Char('j') => move_sel(state, len, 1),
                     KeyCode::Up | KeyCode::Char('k') => move_sel(state, len, -1),
@@ -1093,6 +1223,33 @@ impl App {
                     | KeyCode::Enter
                     | KeyCode::Char('h')
                     | KeyCode::Char('l') => self.cycle_cache_mode(),
+                    _ => {}
+                }
+                return;
+            }
+            Overlay::Filter => {
+                let n = FilterRow::ALL.len();
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('F') => {
+                        self.overlay = Overlay::None
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.filter_cursor = (self.filter_cursor + 1) % n;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.filter_cursor = (self.filter_cursor + n - 1) % n;
+                    }
+                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
+                        self.cycle_filter(1)
+                    }
+                    KeyCode::Left | KeyCode::Char('h') => self.cycle_filter(-1),
+                    // Person rows open a picker; state/priority just advance.
+                    KeyCode::Enter => self.filter_enter(),
+                    // Clear every filter.
+                    KeyCode::Char('c') => {
+                        self.filters = Filters::default();
+                        self.reload_issues();
+                    }
                     _ => {}
                 }
                 return;
@@ -1126,11 +1283,13 @@ impl App {
                 self.clear_filter();
                 return;
             }
-            KeyCode::Tab => {
+            // h / l move focus left / right between panes (Tab / Shift-Tab
+            // still work). j / k stay reserved for moving within a pane.
+            KeyCode::Tab | KeyCode::Char('l') => {
                 self.focus = self.focus.next();
                 return;
             }
-            KeyCode::BackTab => {
+            KeyCode::BackTab | KeyCode::Char('h') => {
                 self.focus = self.focus.prev();
                 return;
             }
@@ -1167,6 +1326,13 @@ impl App {
                     }
                     None => self.status = "Open an issue first to add a sub-issue (N)".into(),
                 }
+                return;
+            }
+            // Shift-F opens the issue-list filter editor (lowercase f is the
+            // in-list text filter, handled per-pane).
+            KeyCode::Char('F') => {
+                self.filter_cursor = 0;
+                self.overlay = Overlay::Filter;
                 return;
             }
             _ => {}
@@ -1265,11 +1431,7 @@ impl App {
                     self.send(Request::LoadStates { team_id: team.id });
                 }
             }
-            KeyCode::Char('a') => {
-                if let Some(team) = self.selected_team().cloned() {
-                    self.send(Request::LoadMembers { team_id: team.id });
-                }
-            }
+            KeyCode::Char('a') => self.load_members_for(MemberTarget::SetAssignee),
             KeyCode::Char('m')
                 if self.detail_target.is_some() => {
                     self.overlay = Overlay::Input {
@@ -1300,11 +1462,7 @@ impl App {
                     self.send(Request::LoadStates { team_id: team.id });
                 }
             }
-            KeyCode::Char('a') => {
-                if let Some(team) = self.selected_team().cloned() {
-                    self.send(Request::LoadMembers { team_id: team.id });
-                }
-            }
+            KeyCode::Char('a') => self.load_members_for(MemberTarget::SetAssignee),
             KeyCode::Char('m')
                 if self.detail_target.is_some() => {
                     self.overlay = Overlay::Input {
@@ -1348,6 +1506,69 @@ fn next_match(matches: &[usize], cur: usize, dir: i32) -> usize {
     }
 }
 
+// ----- filter cycling ----------------------------------------------------
+//
+// Each cycles its field through a fixed ring of preset values. A specific
+// `Person` (set via the member picker) isn't reachable by cycling — stepping
+// off it lands on a neighbouring preset.
+
+fn cycle_assignee(cur: &AssigneeFilter, dir: i32) -> AssigneeFilter {
+    use AssigneeFilter::*;
+    let presets = [Any, Me, Unassigned];
+    let idx = match cur {
+        Any => 0,
+        Me => 1,
+        Unassigned => 2,
+        Person { .. } => {
+            if dir >= 0 {
+                2
+            } else {
+                0
+            }
+        }
+    };
+    presets[(idx + dir).rem_euclid(presets.len() as i32) as usize].clone()
+}
+
+fn cycle_creator(cur: &CreatorFilter, dir: i32) -> CreatorFilter {
+    use CreatorFilter::*;
+    let presets = [Any, Me];
+    let idx = match cur {
+        Any => 0,
+        Me => 1,
+        Person { .. } => {
+            if dir >= 0 {
+                1
+            } else {
+                0
+            }
+        }
+    };
+    presets[(idx + dir).rem_euclid(presets.len() as i32) as usize].clone()
+}
+
+fn cycle_state(cur: Option<StateType>, dir: i32) -> Option<StateType> {
+    let all = StateType::ALL;
+    // Slot 0 is "Any"; slots 1..=N are the state types.
+    let idx = match cur {
+        None => 0,
+        Some(s) => 1 + all.iter().position(|x| *x == s).unwrap_or(0) as i32,
+    };
+    let next = (idx + dir).rem_euclid(all.len() as i32 + 1);
+    (next != 0).then(|| all[(next - 1) as usize])
+}
+
+fn cycle_priority(cur: Option<i64>, dir: i32) -> Option<i64> {
+    // Urgent, High, Medium, Low, No-priority — slot 0 is "Any".
+    let vals = [1, 2, 3, 4, 0];
+    let idx = match cur {
+        None => 0,
+        Some(p) => 1 + vals.iter().position(|v| *v == p).unwrap_or(0) as i32,
+    };
+    let next = (idx + dir).rem_euclid(vals.len() as i32 + 1);
+    (next != 0).then(|| vals[(next - 1) as usize])
+}
+
 /// Move a list selection by `delta`, clamping to `[0, len)`.
 fn move_sel(state: &mut ListState, len: usize, delta: i32) {
     if len == 0 {
@@ -1357,4 +1578,53 @@ fn move_sel(state: &mut ListState, len: usize, delta: i32) {
     let cur = state.selected().unwrap_or(0) as i32;
     let next = (cur + delta).clamp(0, len as i32 - 1);
     state.select(Some(next as usize));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assignee_cycles_through_presets() {
+        use AssigneeFilter::*;
+        assert_eq!(cycle_assignee(&Any, 1), Me);
+        assert_eq!(cycle_assignee(&Me, 1), Unassigned);
+        assert_eq!(cycle_assignee(&Unassigned, 1), Any);
+        assert_eq!(cycle_assignee(&Any, -1), Unassigned);
+        // A specific person isn't reachable by cycling — stepping off lands on
+        // a neighbouring preset.
+        let p = Person { id: "x".into(), label: "tanay".into() };
+        assert_eq!(cycle_assignee(&p, 1), Any);
+        assert_eq!(cycle_assignee(&p, -1), Unassigned);
+    }
+
+    #[test]
+    fn creator_cycle_has_no_unassigned() {
+        use CreatorFilter::*;
+        assert_eq!(cycle_creator(&Any, 1), Me);
+        assert_eq!(cycle_creator(&Me, 1), Any);
+        assert_eq!(cycle_creator(&Any, -1), Me);
+    }
+
+    #[test]
+    fn state_cycle_wraps_through_any() {
+        assert_eq!(cycle_state(None, 1), Some(StateType::ALL[0]));
+        assert_eq!(
+            cycle_state(None, -1),
+            Some(StateType::ALL[StateType::ALL.len() - 1])
+        );
+        // A full loop of (states + Any) steps returns to Any.
+        let mut s = None;
+        for _ in 0..=StateType::ALL.len() {
+            s = cycle_state(s, 1);
+        }
+        assert_eq!(s, None);
+    }
+
+    #[test]
+    fn priority_cycle_includes_any_and_no_priority() {
+        assert_eq!(cycle_priority(None, 1), Some(1)); // Any -> Urgent
+        assert_eq!(cycle_priority(Some(0), 1), None); // No-priority -> Any
+        assert_eq!(cycle_priority(None, -1), Some(0)); // Any (back) -> No-priority
+    }
 }

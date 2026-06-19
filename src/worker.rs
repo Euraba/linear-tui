@@ -9,7 +9,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::client::LinearClient;
 use crate::images;
-use crate::models::{Issue, IssueDetail, Project, Team, User, View, WorkflowState};
+use crate::models::{Filters, Issue, IssueDetail, Project, Team, User, View, WorkflowState};
 
 /// Work the UI asks the background task to perform.
 #[derive(Debug)]
@@ -23,6 +23,7 @@ pub enum Request {
         team_id: String,
         view: View,
         project_id: Option<String>,
+        filters: Filters,
         epoch: u64,
     },
     LoadProjects { team_id: String },
@@ -135,14 +136,15 @@ async fn handle(
             team_id,
             view,
             project_id,
+            filters,
             epoch,
         } => {
-            // Ensure we know who we are before a MyIssues fetch.
+            // Ensure we know who we are before a MyIssues / assignee:me fetch.
             if viewer_id.is_empty() {
                 *viewer_id = client.viewer().await?.id;
             }
             let issues = client
-                .issues(&team_id, view, viewer_id, project_id.as_deref())
+                .issues(&team_id, view, viewer_id, project_id.as_deref(), &filters)
                 .await?;
             Response::Issues {
                 view,

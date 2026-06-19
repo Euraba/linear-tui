@@ -134,7 +134,7 @@ async fn dispatch(
             let project_id = opt_str(params, "project_id");
             let vid = ensure_viewer(client, viewer_id).await?;
             let issues = client
-                .issues(&team_id, view, &vid, project_id.as_deref())
+                .issues(&team_id, view, &vid, project_id.as_deref(), &crate::models::Filters::default())
                 .await?;
             serde_json::to_value(issues)?
         }

@@ -15,7 +15,7 @@ use ratatui_image::{Resize, StatefulImage};
 
 use crate::app::{App, EditMode, FindContext, InputKind, Overlay, Pane, PickerKind};
 use crate::images::ImageState;
-use crate::models::View;
+use crate::models::{AssigneeFilter, CreatorFilter, Filters, View};
 use crate::search;
 use crate::settings::CacheMode;
 
@@ -58,6 +58,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Overlay::None | Overlay::ImageViewer { .. } => {}
         Overlay::Help => draw_help(f),
         Overlay::Settings => draw_settings(f, app.cache_mode),
+        Overlay::Filter => draw_filter(f, &app.filters, app.filter_cursor),
         Overlay::Input { kind, buffer } => draw_input(f, kind, buffer),
         Overlay::Picker { kind, items, state } => {
             draw_picker(f, *kind, items, &mut state.clone())
@@ -192,17 +193,16 @@ fn draw_issues(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    // Show "(visible/total)" when an `f` filter is hiding rows.
-    let title = if app.visible.len() != app.issues.len() {
-        format!(
-            "Issues · {} ({}/{})",
-            app.current_view.label(),
-            app.visible.len(),
-            app.issues.len()
-        )
-    } else {
-        format!("Issues · {}", app.current_view.label())
-    };
+    // "Issues · <view> [· <filters>] [(visible/total)]".
+    let mut title = format!("Issues · {}", app.current_view.label());
+    if app.filters.is_active() {
+        title.push_str(" · ");
+        title.push_str(&app.filters.summary());
+    }
+    // Show "(visible/total)" when an `f` text filter is hiding rows.
+    if app.visible.len() != app.issues.len() {
+        title.push_str(&format!(" ({}/{})", app.visible.len(), app.issues.len()));
+    }
     let list = List::new(items)
         .block(pane_block(&title, app.focus == Pane::Issues))
         .highlight_style(selected_style())
@@ -496,9 +496,9 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let spinner = if app.inflight > 0 { "⣾ " } else { "" };
     let hint = match app.focus {
         Pane::Views | Pane::Teams | Pane::Projects => {
-            "j/k:select+load  Enter:issues  n:new  ,:settings  ?:help  q:quit"
+            "h/l:panes  j/k:select+load  Enter:issues  n:new  ,:settings  ?:help  q:quit"
         }
-        Pane::Issues => "j/k:hover  /:find  f:filter  c:subs  v:img  s:state  a:assign  m:comment  N:new-sub  r:reload",
+        Pane::Issues => "j/k:hover  F:filter  /:find  f:text  c:subs  v:img  s:state  a:assign  m:comment  N:new-sub  r:reload",
         Pane::Detail => "j/k:scroll  p:parent  c:subs  ⌫:back  /:find  v:img  s:state  a:assign  m:comment  N:new-sub",
     };
     let line = Line::from(vec![
@@ -565,6 +565,8 @@ fn draw_picker(
         PickerKind::State => " Set state (Enter to apply, Esc to cancel) ",
         PickerKind::Assignee => " Set assignee (Enter to apply, Esc to cancel) ",
         PickerKind::SubIssue => " Open sub-issue (Enter to open, Esc to cancel) ",
+        PickerKind::FilterAssignee => " Filter by assignee (Enter to pick, Esc to go back) ",
+        PickerKind::FilterCreator => " Filter by creator (Enter to pick, Esc to go back) ",
     };
     let list_items: Vec<ListItem> = items
         .iter()
@@ -689,6 +691,80 @@ fn draw_settings(f: &mut Frame, mode: CacheMode) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+fn draw_filter(f: &mut Frame, filters: &Filters, cursor: usize) {
+    let area = centered(f.area(), 58, 45);
+    f.render_widget(Clear, area);
+
+    // Current value of each row, in FilterRow::ALL order.
+    let assignee = match &filters.assignee {
+        AssigneeFilter::Any => "(any)".to_string(),
+        AssigneeFilter::Me => "me".to_string(),
+        AssigneeFilter::Unassigned => "unassigned".to_string(),
+        AssigneeFilter::Person { label, .. } => label.clone(),
+    };
+    let creator = match &filters.creator {
+        CreatorFilter::Any => "(any)".to_string(),
+        CreatorFilter::Me => "me".to_string(),
+        CreatorFilter::Person { label, .. } => label.clone(),
+    };
+    let state = filters
+        .state
+        .map(|s| s.label().to_string())
+        .unwrap_or_else(|| "(any)".into());
+    let priority = filters
+        .priority
+        .map(priority_label)
+        .map(str::to_string)
+        .unwrap_or_else(|| "(any)".into());
+    let rows = [
+        ("Assignee", assignee),
+        ("Creator", creator),
+        ("State", state),
+        ("Priority", priority),
+    ];
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "linear-tui — filter issues",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+    for (i, (label, value)) in rows.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { "▌" } else { " " };
+        let label_style = if selected {
+            selected_style()
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let value_style = if selected {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {marker} {label:<10}"), label_style),
+            Span::styled(format!(" ‹ {value} ›"), value_style),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  j/k: row   h/l: change   Enter: pick a person (assignee/creator)",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  c: clear all    Esc / F: close    (filters apply live)",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green))
+        .title(Span::styled(" Filter ", Style::default().fg(Color::Green)));
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn draw_help(f: &mut Frame) {
     let area = centered(f.area(), 60, 70);
     f.render_widget(Clear, area);
@@ -698,13 +774,15 @@ fn draw_help(f: &mut Frame) {
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("  Tab / Shift+Tab   cycle pane focus"),
-        Line::from("  j / k  ↑ / ↓       move selection / scroll"),
+        Line::from("  h / l             move focus left / right between panes"),
+        Line::from("  Tab / Shift+Tab   same (cycle pane focus)"),
+        Line::from("  j / k  ↑ / ↓       move selection / scroll within a pane"),
         Line::from("  (selecting anything loads automatically — no Enter)"),
         Line::from("  Enter             focus issue list / detail pane"),
         Line::from(""),
         Line::from("  /                 find — jump to matches (n/N to cycle)"),
-        Line::from("  f                 filter the issue list to matches"),
+        Line::from("  f                 filter the issue list to matches (text)"),
+        Line::from("  F                 filter issues by assignee/creator/state/priority"),
         Line::from("  p                 go to parent issue"),
         Line::from("  c                 open a sub-issue   (⌫ to go back)"),
         Line::from("  v                 view embedded images (n/p to cycle)"),

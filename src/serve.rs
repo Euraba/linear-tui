@@ -101,7 +101,10 @@ async fn process(
 
     match dispatch(client, viewer_id, cfg, method, &params).await {
         Ok(result) => json!({ "id": id, "ok": true, "result": result }),
-        Err(e) => json!({ "id": id, "ok": false, "error": format!("{e:#}") }),
+        Err(e) => {
+            // Scrub before sending across the RPC boundary to the plugin.
+            json!({ "id": id, "ok": false, "error": crate::config::redact_secrets(&format!("{e:#}")) })
+        }
     }
 }
 

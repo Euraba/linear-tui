@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use ratatui_image::protocol::StatefulProtocol;
 use sha2::{Digest, Sha256};
 
-use crate::models::IssueDetail;
+use crate::domain::IssueDetail;
 
 /// The render state for one image URL, kept in the UI's session-long cache
 /// (keyed by URL). The decoded protocol is reused across viewer opens.

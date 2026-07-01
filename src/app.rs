@@ -8,11 +8,11 @@ use ratatui_image::picker::Picker;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache;
-use crate::images::{self, ImageState};
-use crate::models::{
+use crate::domain::{
     AssigneeFilter, CreatorFilter, Filters, Issue, IssueDetail, Project, StateType, Team, User,
     View, WorkflowState,
 };
+use crate::images::{self, ImageState};
 use crate::search;
 use crate::settings::{CacheMode, Settings};
 use crate::worker::{Request, Response};

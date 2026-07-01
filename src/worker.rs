@@ -8,8 +8,8 @@ use image::DynamicImage;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::client::LinearClient;
+use crate::domain::{Filters, Issue, IssueDetail, Project, Team, User, View, WorkflowState};
 use crate::images;
-use crate::models::{Filters, Issue, IssueDetail, Project, Team, User, View, WorkflowState};
 
 /// Work the UI asks the background task to perform.
 #[derive(Debug)]

@@ -12,8 +12,10 @@ use ratatui::{
 use ratatui_image::{Resize, StatefulImage};
 
 use crate::app::{App, EditMode, FindContext, InputKind, Overlay, Pane, PickerKind};
+use crate::domain::{
+    priority_label, short_date, state_glyph, AssigneeFilter, CreatorFilter, Filters, View,
+};
 use crate::images::ImageState;
-use crate::models::{AssigneeFilter, CreatorFilter, Filters, View};
 use crate::search;
 use crate::settings::CacheMode;
 
@@ -1027,33 +1029,6 @@ fn parse_hex_color(hex: &Option<String>) -> Option<Color> {
     let g = u8::from_str_radix(&h[2..4], 16).ok()?;
     let b = u8::from_str_radix(&h[4..6], 16).ok()?;
     Some(Color::Rgb(r, g, b))
-}
-
-fn state_glyph(kind: &str) -> char {
-    match kind {
-        "completed" => '✓',
-        "canceled" => '✗',
-        "started" => '◐',
-        "unstarted" => '○',
-        "backlog" => '·',
-        "triage" => '△',
-        _ => '•',
-    }
-}
-
-fn priority_label(p: i64) -> &'static str {
-    match p {
-        1 => "Urgent",
-        2 => "High",
-        3 => "Medium",
-        4 => "Low",
-        _ => "None",
-    }
-}
-
-/// Trim an ISO-8601 timestamp down to `YYYY-MM-DD HH:MM`.
-fn short_date(s: &str) -> String {
-    s.replace('T', " ").chars().take(16).collect::<String>()
 }
 
 #[cfg(test)]

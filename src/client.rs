@@ -7,11 +7,11 @@ use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::images;
-use crate::models::{
+use crate::domain::{
     AssigneeFilter, CreatorFilter, Filters, Issue, IssueDetail, Project, Team, User, View,
     WorkflowState,
 };
+use crate::images;
 
 const ENDPOINT: &str = "https://api.linear.app/graphql";
 
@@ -515,7 +515,7 @@ fn url_is_linear(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::StateType;
+    use crate::domain::StateType;
 
     #[test]
     fn key_attached_only_for_real_linear_hosts() {

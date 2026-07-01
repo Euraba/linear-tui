@@ -25,7 +25,7 @@ use tokio::sync::OnceCell;
 
 use crate::client::LinearClient;
 use crate::config::Config;
-use crate::models::View;
+use crate::domain::View;
 
 /// Entry point for the `serve` subcommand. Loads config, builds the client, and
 /// runs the stdio loop on a multi-thread Tokio runtime.
@@ -135,7 +135,9 @@ async fn dispatch(
         }
         "issues" => {
             let team_id = req_str(params, "team_id")?;
-            let view = parse_view(opt_str(params, "view").as_deref().unwrap_or("MyIssues"))?;
+            let view_name = opt_str(params, "view").unwrap_or_else(|| "MyIssues".to_string());
+            let view =
+                View::parse(&view_name).ok_or_else(|| anyhow!("unknown view `{view_name}`"))?;
             let project_id = opt_str(params, "project_id");
             let vid = ensure_viewer(client, viewer_id).await?;
             let issues = client
@@ -144,7 +146,7 @@ async fn dispatch(
                     view,
                     &vid,
                     project_id.as_deref(),
-                    &crate::models::Filters::default(),
+                    &crate::domain::Filters::default(),
                 )
                 .await?;
             serde_json::to_value(issues)?
@@ -190,16 +192,6 @@ async fn ensure_viewer(client: &LinearClient, viewer_id: &OnceCell<String>) -> R
         .get_or_try_init(|| async { client.viewer().await.map(|u| u.id) })
         .await?;
     Ok(id.clone())
-}
-
-fn parse_view(s: &str) -> Result<View> {
-    Ok(match s {
-        "MyIssues" => View::MyIssues,
-        "Active" => View::Active,
-        "Backlog" => View::Backlog,
-        "All" => View::All,
-        other => return Err(anyhow!("unknown view `{other}`")),
-    })
 }
 
 /// Required string parameter.

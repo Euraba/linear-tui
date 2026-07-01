@@ -24,7 +24,7 @@ use serde_json::json;
 
 use crate::client::LinearClient;
 use crate::config::Config;
-use crate::models::{Team, User, View, WorkflowState};
+use crate::domain::{Team, User, View, WorkflowState};
 
 /// Flags that take no value (everything else consumes the next token).
 const BOOL_FLAGS: &[&str] = &["json", "mine"];
@@ -459,17 +459,7 @@ fn type_keyword(w: &str) -> Option<&'static str> {
 }
 
 fn parse_view(s: &str) -> Result<View> {
-    Ok(match s.to_ascii_lowercase().as_str() {
-        "my" | "mine" | "myissues" | "my-issues" => View::MyIssues,
-        "active" => View::Active,
-        "backlog" => View::Backlog,
-        "all" => View::All,
-        other => {
-            return Err(anyhow!(
-                "unknown view `{other}` (use: my|active|backlog|all)"
-            ))
-        }
-    })
+    View::parse(s).ok_or_else(|| anyhow!("unknown view `{s}` (use: my|active|backlog|all)"))
 }
 
 // ----- Output ------------------------------------------------------------
@@ -479,7 +469,7 @@ fn print_json<T: Serialize>(v: &T) -> Result<()> {
     Ok(())
 }
 
-fn print_issue_list(issues: &[crate::models::Issue]) {
+fn print_issue_list(issues: &[crate::domain::Issue]) {
     if issues.is_empty() {
         println!("(no issues)");
         return;
@@ -502,7 +492,7 @@ fn print_issue_list(issues: &[crate::models::Issue]) {
     }
 }
 
-fn print_issue_detail(d: &crate::models::IssueDetail) {
+fn print_issue_detail(d: &crate::domain::IssueDetail) {
     println!("{}  {}", d.identifier, d.title);
     if let Some(s) = &d.state {
         println!("State:    {} ({})", s.name, s.kind);
@@ -511,7 +501,7 @@ fn print_issue_detail(d: &crate::models::IssueDetail) {
         "Assignee: {}",
         d.assignee.as_ref().map(|a| a.label()).unwrap_or("—")
     );
-    println!("Priority: {}", priority_word(d.priority));
+    println!("Priority: {}", crate::domain::priority_label(d.priority));
     if let Some(p) = &d.parent {
         println!("Parent:   {} {}", p.identifier, p.title);
     }
@@ -538,16 +528,6 @@ fn print_issue_detail(d: &crate::models::IssueDetail) {
                 println!("    {line}");
             }
         }
-    }
-}
-
-fn priority_word(p: i64) -> &'static str {
-    match p {
-        1 => "Urgent",
-        2 => "High",
-        3 => "Medium",
-        4 => "Low",
-        _ => "None",
     }
 }
 

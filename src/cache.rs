@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
 
-use crate::models::{Issue, IssueDetail, View};
+use crate::domain::{Issue, IssueDetail, View};
 
 /// `~/.cache/linear-tui/tickets/` (honours `$XDG_CACHE_HOME`).
 fn tickets_dir() -> Option<PathBuf> {

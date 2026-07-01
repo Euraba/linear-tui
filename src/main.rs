@@ -8,10 +8,10 @@
 mod app;
 mod cache;
 mod cli;
-mod client;
 mod config;
+mod domain;
 mod images;
-mod models;
+mod linear;
 mod search;
 mod serve;
 mod settings;
@@ -31,8 +31,8 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc::unbounded_channel;
 
 use app::App;
-use client::LinearClient;
 use config::Config;
+use linear::LinearClient;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 

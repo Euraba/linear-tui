@@ -1138,6 +1138,39 @@ mod tests {
     }
 
     #[test]
+    fn adversarial_inputs_do_not_panic() {
+        // Multibyte/emoji around every marker, empty and unterminated markers,
+        // and shapes that only look like links — none of these must panic on
+        // the byte-index slicing in parse_inline / parse_link / heading detect.
+        let cases = [
+            "café `naïve()` ☕",
+            "## Café ☕ heading",
+            "###### é",
+            "####### not a heading é",
+            "**bøld** and *italic* café",
+            "empty code `` and empty bold **** ok",
+            "[café](http://x.io/é) ☕",
+            "![diagram é](http://x.io/a.png)",
+            "unterminated `code and [link](and **bold",
+            "array[0](x) café",
+            "```rust é\nfn café() {}\n```\ntrailing é",
+            "`",
+            "**",
+            "[",
+            "[]()",
+            "☕☕☕",
+            "",
+        ];
+        for body in cases {
+            let mut lines = Vec::new();
+            let mut matches = Vec::new();
+            // Exercise both indents and a multibyte search query.
+            push_body_lines(&mut lines, &mut matches, body, "café", "");
+            push_body_lines(&mut lines, &mut matches, body, "é", "  ");
+        }
+    }
+
+    #[test]
     fn headings_are_bold_accent_without_markers() {
         let mut lines = Vec::new();
         let mut matches = Vec::new();

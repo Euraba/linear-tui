@@ -23,9 +23,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::OnceCell;
 
-use crate::client::LinearClient;
 use crate::config::Config;
 use crate::domain::View;
+use crate::linear::LinearClient;
 
 /// Entry point for the `serve` subcommand. Loads config, builds the client, and
 /// runs the stdio loop on a multi-thread Tokio runtime.

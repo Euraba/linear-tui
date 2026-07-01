@@ -7,6 +7,7 @@ use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
+use super::queries::with_issue_fields;
 use crate::domain::{
     AssigneeFilter, CreatorFilter, Filters, Issue, IssueDetail, Project, Team, User, View,
     WorkflowState,
@@ -162,20 +163,18 @@ impl LinearClient {
     ) -> Result<Vec<Issue>> {
         let filter = build_issue_filter(view, viewer_id, project_id, filters);
 
-        let q = r#"
+        let q = with_issue_fields(
+            r#"
             query($id: String!, $filter: IssueFilter, $n: Int!) {
               team(id: $id) {
                 issues(filter: $filter, first: $n, orderBy: updatedAt) {
-                  nodes {
-                    id identifier title priority
-                    state { id name type color }
-                    assignee { id name displayName }
-                  }
+                  nodes { ...IssueFields }
                 }
               }
-            }"#;
+            }"#,
+        );
         self.query_at(
-            q,
+            &q,
             json!({ "id": team_id, "filter": filter, "n": self.page_size }),
             &["team", "issues", "nodes"],
         )
@@ -184,28 +183,25 @@ impl LinearClient {
 
     /// Full detail for a single issue, including comments.
     pub async fn issue_detail(&self, issue_id: &str) -> Result<IssueDetail> {
-        let q = r#"
+        let q = with_issue_fields(
+            r#"
             query($id: String!) {
               issue(id: $id) {
-                id identifier title description priority url
-                state { id name type color }
-                assignee { id name displayName }
+                ...IssueFields
+                description url
                 parent { id identifier title }
                 children(first: 50) {
-                  nodes {
-                    id identifier title priority
-                    state { id name type color }
-                    assignee { id name displayName }
-                  }
+                  nodes { ...IssueFields }
                 }
                 comments(first: 50) {
                   nodes { body createdAt user { id name displayName } }
                 }
               }
-            }"#;
+            }"#,
+        );
         // `comments` and `children` arrive as `{ nodes: [...] }`; flatten the
         // connections to plain arrays before decoding.
-        let mut data = self.request(q, json!({ "id": issue_id })).await?;
+        let mut data = self.request(&q, json!({ "id": issue_id })).await?;
         let mut issue = data
             .get_mut("issue")
             .map(Value::take)
@@ -354,18 +350,16 @@ impl LinearClient {
     /// Full-text search across every issue the key can see (Linear's
     /// `searchIssues`). Returns the same summary rows as the issue list.
     pub async fn search(&self, term: &str, first: u32) -> Result<Vec<Issue>> {
-        let q = r#"
+        let q = with_issue_fields(
+            r#"
             query($term: String!, $n: Int!) {
               searchIssues(term: $term, first: $n) {
-                nodes {
-                  id identifier title priority
-                  state { id name type color }
-                  assignee { id name displayName }
-                }
+                nodes { ...IssueFields }
               }
-            }"#;
+            }"#,
+        );
         self.query_at(
-            q,
+            &q,
             json!({ "term": term, "n": first }),
             &["searchIssues", "nodes"],
         )
@@ -398,18 +392,16 @@ impl LinearClient {
         if let Some(pid) = project_id {
             filter["project"] = json!({ "id": { "eq": pid } });
         }
-        let q = r#"
+        let q = with_issue_fields(
+            r#"
             query($filter: IssueFilter, $n: Int!) {
               issues(filter: $filter, first: $n, orderBy: updatedAt) {
-                nodes {
-                  id identifier title priority
-                  state { id name type color }
-                  assignee { id name displayName }
-                }
+                nodes { ...IssueFields }
               }
-            }"#;
+            }"#,
+        );
         self.query_at(
-            q,
+            &q,
             json!({ "filter": filter, "n": first }),
             &["issues", "nodes"],
         )

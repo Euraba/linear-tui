@@ -80,7 +80,7 @@ fn is_http_url(s: &str) -> bool {
 ///
 /// This takes an already-parsed **host**, not a URL: the caller must obtain it
 /// with the same parser the HTTP client uses to route the request (see
-/// [`crate::client`]), so there is no parser-differential gap a crafted URL
+/// [`crate::linear`]), so there is no parser-differential gap a crafted URL
 /// (e.g. `https://evil.com\@uploads.linear.app/`) could slip the key through.
 pub fn is_linear_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("linear.app") || host.to_ascii_lowercase().ends_with(".linear.app")

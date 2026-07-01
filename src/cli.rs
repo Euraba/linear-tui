@@ -22,9 +22,9 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::json;
 
-use crate::client::LinearClient;
 use crate::config::Config;
 use crate::domain::{Team, User, View, WorkflowState};
+use crate::linear::LinearClient;
 
 /// Flags that take no value (everything else consumes the next token).
 const BOOL_FLAGS: &[&str] = &["json", "mine"];

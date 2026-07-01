@@ -514,9 +514,24 @@ fn push_body_lines(
             lines.push(Line::from(spans));
             continue;
         }
-        // Prose line: colour inline `code` spans, still search-highlighting.
+        // ATX heading (`#`..`######` + space): render bold + accent, dropping
+        // the markers. Inline markdown inside a heading is left literal.
+        let trimmed = raw.trim_start();
+        let hashes = trimmed.chars().take_while(|&c| c == '#').count();
+        if (1..=6).contains(&hashes) && trimmed[hashes..].starts_with(' ') {
+            let title = trimmed[hashes + 1..].trim_start();
+            let text = format!("{indent}{title}");
+            let style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+            let (spans, matched) = highlight_spans(&text, query, style);
+            if matched {
+                match_lines.push(lines.len());
+            }
+            lines.push(Line::from(spans));
+            continue;
+        }
+        // Prose line: inline markdown (code / bold / links), search-highlighted.
         let text = format!("{indent}{raw}");
-        let (spans, matched) = inline_code_spans(&text, query);
+        let (spans, matched) = inline_md_spans(&text, query);
         if matched {
             match_lines.push(lines.len());
         }
@@ -524,47 +539,100 @@ fn push_body_lines(
     }
 }
 
-/// Split a prose line on single backticks, styling inline `` `code` `` segments
-/// with [`CODE_FG`] while leaving the rest plain. Search matches are highlighted
-/// within every segment. Returns the spans and whether any match was found.
-fn inline_code_spans(text: &str, query: &str) -> (Vec<Span<'static>>, bool) {
-    if !text.contains('`') {
-        return highlight_spans(text, query, Style::default());
-    }
-    let code_style = Style::default().fg(CODE_FG);
+/// Soft blue for `[text](url)` link labels.
+const LINK_FG: Color = Color::Rgb(97, 175, 239);
+
+/// Render a prose line as spans, applying inline markdown — `` `code` ``,
+/// `**bold**`, and `[text](url)` links — then search-highlighting within each
+/// styled segment so matches still reverse-video. Returns the spans and whether
+/// any match was found.
+fn inline_md_spans(text: &str, query: &str) -> (Vec<Span<'static>>, bool) {
     let mut spans = Vec::new();
     let mut matched = false;
-    let mut rest = text;
-    loop {
-        let Some(open) = rest.find('`') else {
-            let (s, m) = highlight_spans(rest, query, Style::default());
-            spans.extend(s);
-            matched |= m;
-            break;
-        };
-        if open > 0 {
-            let (s, m) = highlight_spans(&rest[..open], query, Style::default());
-            spans.extend(s);
-            matched |= m;
-        }
-        let after = &rest[open + 1..];
-        match after.find('`') {
-            Some(close) => {
-                let (s, m) = highlight_spans(&after[..close], query, code_style);
-                spans.extend(s);
-                matched |= m;
-                rest = &after[close + 1..];
-            }
-            None => {
-                // Unterminated backtick: treat the remainder as plain text.
-                let (s, m) = highlight_spans(&rest[open..], query, Style::default());
-                spans.extend(s);
-                matched |= m;
-                break;
-            }
-        }
+    for (content, style) in parse_inline(text) {
+        let (s, m) = highlight_spans(&content, query, style);
+        spans.extend(s);
+        matched |= m;
     }
     (spans, matched)
+}
+
+/// Tokenise a line into `(text, style)` runs for inline markdown. Markers are
+/// matched non-greedily on the same line; an unterminated marker is emitted as
+/// literal text. `![alt](url)` image links render their alt text dimmed (the
+/// image itself is surfaced separately in the detail header).
+fn parse_inline(text: &str) -> Vec<(String, Style)> {
+    let plain = Style::default();
+    let code = Style::default().fg(CODE_FG);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let link = Style::default()
+        .fg(LINK_FG)
+        .add_modifier(Modifier::UNDERLINED);
+    let alt = Style::default().fg(Color::DarkGray);
+
+    let mut out: Vec<(String, Style)> = Vec::new();
+    let mut buf = String::new();
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        // Inline code: `code` (takes priority so markers inside stay literal).
+        if let Some(stripped) = rest.strip_prefix('`') {
+            if let Some(close) = stripped.find('`') {
+                flush(&mut out, &mut buf, plain);
+                out.push((stripped[..close].to_string(), code));
+                i += 1 + close + 1;
+                continue;
+            }
+        }
+        // Link: [text](url) — or an image ![alt](url) when preceded by `!`.
+        if rest.starts_with('[') {
+            if let Some((label, len)) = parse_link(rest) {
+                let is_image = buf.ends_with('!');
+                if is_image {
+                    buf.pop();
+                }
+                flush(&mut out, &mut buf, plain);
+                out.push((label, if is_image { alt } else { link }));
+                i += len;
+                continue;
+            }
+        }
+        // Bold: **text**.
+        if let Some(stripped) = rest.strip_prefix("**") {
+            if let Some(close) = stripped.find("**") {
+                flush(&mut out, &mut buf, plain);
+                out.push((stripped[..close].to_string(), bold));
+                i += 2 + close + 2;
+                continue;
+            }
+        }
+        let ch = rest.chars().next().unwrap();
+        buf.push(ch);
+        i += ch.len_utf8();
+    }
+    flush(&mut out, &mut buf, plain);
+    out
+}
+
+/// Flush the pending plain-text buffer into `out` as a styled run.
+fn flush(out: &mut Vec<(String, Style)>, buf: &mut String, style: Style) {
+    if !buf.is_empty() {
+        out.push((std::mem::take(buf), style));
+    }
+}
+
+/// Parse a `[label](url)` link at the start of `rest`, returning the label and
+/// the number of bytes consumed (through the closing `)`). `None` if the shape
+/// doesn't match.
+fn parse_link(rest: &str) -> Option<(String, usize)> {
+    let close_br = rest.find(']')?;
+    let after = &rest[close_br + 1..];
+    if !after.starts_with('(') {
+        return None;
+    }
+    let close_par = after.find(')')?;
+    let label = rest[1..close_br].to_string();
+    Some((label, close_br + 1 + close_par + 1))
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
@@ -1017,7 +1085,7 @@ mod tests {
 
     #[test]
     fn inline_code_is_styled_and_searchable() {
-        let (spans, _) = inline_code_spans("call `foo()` now", "");
+        let (spans, _) = inline_md_spans("call `foo()` now", "");
         let code = spans
             .iter()
             .find(|s| s.content.as_ref() == "foo()")
@@ -1033,8 +1101,52 @@ mod tests {
 
     #[test]
     fn unterminated_backtick_is_plain_text() {
-        let (spans, _) = inline_code_spans("a `dangling tick", "");
-        assert_eq!(spans.iter().map(|s| s.content.as_ref()).collect::<String>(), "a `dangling tick");
+        let (spans, _) = inline_md_spans("a `dangling tick", "");
+        assert_eq!(
+            spans.iter().map(|s| s.content.as_ref()).collect::<String>(),
+            "a `dangling tick"
+        );
         assert!(spans.iter().all(|s| s.style.fg != Some(CODE_FG)));
+    }
+
+    #[test]
+    fn bold_and_links_are_styled() {
+        let (spans, _) = inline_md_spans("see **this** and [docs](https://x.io) ok", "");
+        let bold = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "this")
+            .expect("bold segment");
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+
+        // Link shows only the label, styled + underlined; the URL is hidden.
+        let link = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "docs")
+            .expect("link label");
+        assert_eq!(link.style.fg, Some(LINK_FG));
+        assert!(link.style.add_modifier.contains(Modifier::UNDERLINED));
+        let rendered: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(rendered, "see this and docs ok");
+    }
+
+    #[test]
+    fn image_link_drops_bang_and_dims_alt() {
+        let (spans, _) = inline_md_spans("![diagram](https://x.io/a.png)", "");
+        let rendered: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(rendered, "diagram");
+        assert!(spans.iter().any(|s| s.style.fg == Some(Color::DarkGray)));
+    }
+
+    #[test]
+    fn headings_are_bold_accent_without_markers() {
+        let mut lines = Vec::new();
+        let mut matches = Vec::new();
+        push_body_lines(&mut lines, &mut matches, "## Overview\nbody", "", "");
+        assert_eq!(text_of(&lines[0]), "Overview");
+        assert!(lines[0]
+            .spans
+            .iter()
+            .any(|s| s.style.add_modifier.contains(Modifier::BOLD)));
+        assert_eq!(text_of(&lines[1]), "body");
     }
 }

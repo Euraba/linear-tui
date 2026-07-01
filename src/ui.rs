@@ -270,13 +270,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::from(""));
         }
         if let Some(desc) = d.description.as_ref().filter(|s| !s.is_empty()) {
-            for l in desc.lines() {
-                let (spans, matched) = highlight_spans(l, q, Style::default());
-                if matched {
-                    match_lines.push(lines.len());
-                }
-                lines.push(Line::from(spans));
-            }
+            push_body_lines(&mut lines, &mut match_lines, desc, q, "");
             lines.push(Line::from(""));
         }
         // Sub-issues (children).
@@ -333,14 +327,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::styled(when, Style::default().fg(Color::DarkGray)),
             ]));
-            for l in c.body.lines() {
-                let text = format!("  {l}");
-                let (spans, matched) = highlight_spans(&text, q, Style::default());
-                if matched {
-                    match_lines.push(lines.len());
-                }
-                lines.push(Line::from(spans));
-            }
+            push_body_lines(&mut lines, &mut match_lines, &c.body, q, "  ");
             lines.push(Line::from(""));
         }
         lines
@@ -476,6 +463,108 @@ fn highlight_spans(text: &str, query: &str, base: Style) -> (Vec<Span<'static>>,
         spans.push(Span::styled(text[last..].to_string(), base));
     }
     (spans, true)
+}
+
+/// Soft green used for both fenced and inline code so code reads as code across
+/// light and dark terminals without relying on a background fill.
+const CODE_FG: Color = Color::Rgb(152, 195, 121);
+
+/// Render a markdown body into styled lines. Fenced code blocks (```` ``` ````)
+/// get a dim bordered gutter and monospace-green text; inline `` `code` `` spans
+/// are coloured too. Everything is still search-highlighted. `indent` is
+/// prepended to every emitted line (comments indent their bodies by two spaces),
+/// and any line that contains a search match records its rendered index into
+/// `match_lines` for `n`/`N` jumps.
+fn push_body_lines(
+    lines: &mut Vec<Line<'static>>,
+    match_lines: &mut Vec<usize>,
+    body: &str,
+    query: &str,
+    indent: &str,
+) {
+    let gutter = Style::default().fg(Color::DarkGray);
+    let code_base = Style::default().fg(CODE_FG);
+    let mut in_code = false;
+    for raw in body.lines() {
+        if let Some(rest) = raw.trim_start().strip_prefix("```") {
+            // A fence line toggles the code block; render it as a dim border,
+            // showing the language tag (if any) when the block opens.
+            in_code = !in_code;
+            let border = if in_code {
+                let lang = rest.trim();
+                if lang.is_empty() {
+                    format!("{indent}┌─")
+                } else {
+                    format!("{indent}┌─ {lang}")
+                }
+            } else {
+                format!("{indent}└─")
+            };
+            lines.push(Line::from(Span::styled(border, gutter)));
+            continue;
+        }
+        if in_code {
+            // Literal code line: dim gutter + green text, no inline markdown.
+            let mut spans = vec![Span::styled(format!("{indent}│ "), gutter)];
+            let (code, matched) = highlight_spans(raw, query, code_base);
+            if matched {
+                match_lines.push(lines.len());
+            }
+            spans.extend(code);
+            lines.push(Line::from(spans));
+            continue;
+        }
+        // Prose line: colour inline `code` spans, still search-highlighting.
+        let text = format!("{indent}{raw}");
+        let (spans, matched) = inline_code_spans(&text, query);
+        if matched {
+            match_lines.push(lines.len());
+        }
+        lines.push(Line::from(spans));
+    }
+}
+
+/// Split a prose line on single backticks, styling inline `` `code` `` segments
+/// with [`CODE_FG`] while leaving the rest plain. Search matches are highlighted
+/// within every segment. Returns the spans and whether any match was found.
+fn inline_code_spans(text: &str, query: &str) -> (Vec<Span<'static>>, bool) {
+    if !text.contains('`') {
+        return highlight_spans(text, query, Style::default());
+    }
+    let code_style = Style::default().fg(CODE_FG);
+    let mut spans = Vec::new();
+    let mut matched = false;
+    let mut rest = text;
+    loop {
+        let Some(open) = rest.find('`') else {
+            let (s, m) = highlight_spans(rest, query, Style::default());
+            spans.extend(s);
+            matched |= m;
+            break;
+        };
+        if open > 0 {
+            let (s, m) = highlight_spans(&rest[..open], query, Style::default());
+            spans.extend(s);
+            matched |= m;
+        }
+        let after = &rest[open + 1..];
+        match after.find('`') {
+            Some(close) => {
+                let (s, m) = highlight_spans(&after[..close], query, code_style);
+                spans.extend(s);
+                matched |= m;
+                rest = &after[close + 1..];
+            }
+            None => {
+                // Unterminated backtick: treat the remainder as plain text.
+                let (s, m) = highlight_spans(&rest[open..], query, Style::default());
+                spans.extend(s);
+                matched |= m;
+                break;
+            }
+        }
+    }
+    (spans, matched)
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
@@ -897,4 +986,55 @@ fn priority_label(p: i64) -> &'static str {
 /// Trim an ISO-8601 timestamp down to `YYYY-MM-DD HH:MM`.
 fn short_date(s: &str) -> String {
     s.replace('T', " ").chars().take(16).collect::<String>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Concatenate a line's span contents back into a string.
+    fn text_of(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn fenced_block_gets_borders_and_gutters() {
+        let mut lines = Vec::new();
+        let mut matches = Vec::new();
+        let body = "before\n```rust\nfn main() {}\n```\nafter";
+        push_body_lines(&mut lines, &mut matches, body, "", "");
+
+        let rendered: Vec<String> = lines.iter().map(text_of).collect();
+        assert_eq!(
+            rendered,
+            vec!["before", "┌─ rust", "│ fn main() {}", "└─", "after"]
+        );
+        // Code text is styled distinctly from prose.
+        let code_line = &lines[2];
+        assert!(code_line.spans.iter().any(|s| s.style.fg == Some(CODE_FG)));
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn inline_code_is_styled_and_searchable() {
+        let (spans, _) = inline_code_spans("call `foo()` now", "");
+        let code = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "foo()")
+            .expect("inline code segment");
+        assert_eq!(code.style.fg, Some(CODE_FG));
+
+        // A search match inside a code block is reported for n/N jumps.
+        let mut lines = Vec::new();
+        let mut matches = Vec::new();
+        push_body_lines(&mut lines, &mut matches, "```\nneedle\n```", "needle", "");
+        assert_eq!(matches, vec![1]);
+    }
+
+    #[test]
+    fn unterminated_backtick_is_plain_text() {
+        let (spans, _) = inline_code_spans("a `dangling tick", "");
+        assert_eq!(spans.iter().map(|s| s.content.as_ref()).collect::<String>(), "a `dangling tick");
+        assert!(spans.iter().all(|s| s.style.fg != Some(CODE_FG)));
+    }
 }

@@ -1,107 +1,17 @@
-//! `linear-tui <command>`: a one-shot, scriptable CLI over the same
-//! [`LinearClient`] the TUI and `serve` backend use. It's the surface an agent
-//! (e.g. Claude Code) drives from any project to read and manage Linear.
-//!
-//! Every command prints human-readable text by default; pass `--json` for the
-//! raw model objects (stable shapes, good for piping). Issues are addressed by
-//! their human identifier ("ENG-123") everywhere — UUIDs are never needed.
-//!
-//! ```text
-//!   linear-tui issues --mine
-//!   linear-tui search "redis timeout"
-//!   linear-tui view ENG-123
-//!   linear-tui create --team ENG --title "Fix login" --assignee me --priority 2
-//!   linear-tui comment ENG-123 "shipping today"
-//!   linear-tui state ENG-123 "In Progress"
-//!   linear-tui assign ENG-123 me
-//! ```
-
-use std::collections::{HashMap, HashSet};
+//! The individual CLI command handlers and the name-resolution helpers they
+//! share. Each `*_cmd` maps one subcommand to [`LinearClient`] calls and prints
+//! via the `super::output` formatters.
 
 use anyhow::{anyhow, Result};
-use serde::Serialize;
 use serde_json::json;
 
+use super::output::{print_issue_detail, print_issue_list, print_json};
+use super::ParsedArgs;
 use crate::config::Config;
 use crate::domain::{Team, User, View, WorkflowState};
 use crate::linear::LinearClient;
 
-/// Flags that take no value (everything else consumes the next token).
-const BOOL_FLAGS: &[&str] = &["json", "mine"];
-
-/// Entry point for any non-`serve` invocation that has at least one argument.
-/// Loads config, builds the client, and runs the requested command to
-/// completion on a single-threaded Tokio runtime.
-pub fn run() -> Result<()> {
-    let mut argv: Vec<String> = std::env::args().skip(1).collect();
-    // `main` only routes here when argv is non-empty.
-    let cmd = argv.remove(0);
-    if matches!(cmd.as_str(), "-h" | "--help" | "help") {
-        print_help();
-        return Ok(());
-    }
-
-    let args = ParsedArgs::parse(&argv);
-    let json = args.bools.contains("json");
-
-    let cfg = Config::load()?;
-    let client = LinearClient::new(cfg.api_key.clone(), cfg.page_size)?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(dispatch(&client, &cfg, &cmd, &args, json))
-}
-
-async fn dispatch(
-    client: &LinearClient,
-    cfg: &Config,
-    cmd: &str,
-    args: &ParsedArgs,
-    json: bool,
-) -> Result<()> {
-    match cmd {
-        "me" | "viewer" => {
-            let u = client.viewer().await?;
-            if json {
-                print_json(&u)?;
-            } else {
-                println!("Signed in as {} ({})", u.label(), u.id);
-            }
-        }
-        "teams" => {
-            let teams = client.teams().await?;
-            if json {
-                print_json(&teams)?;
-            } else if teams.is_empty() {
-                println!("(no teams)");
-            } else {
-                for t in &teams {
-                    println!("{:<8} {}", t.key, t.name);
-                }
-            }
-        }
-        "issues" => issues_cmd(client, cfg, args, json).await?,
-        "search" => search_cmd(client, cfg, args, json).await?,
-        "view" | "show" => view_cmd(client, args, json).await?,
-        "create" | "new" => create_cmd(client, args, json).await?,
-        "comment" => comment_cmd(client, args, json).await?,
-        "state" => state_cmd(client, args, json).await?,
-        "assign" => assign_cmd(client, args, json).await?,
-        "states" => states_cmd(client, cfg, args, json).await?,
-        "projects" => projects_cmd(client, cfg, args, json).await?,
-        "members" => members_cmd(client, cfg, args, json).await?,
-        other => {
-            print_help();
-            return Err(anyhow!("unknown command `{other}`"));
-        }
-    }
-    Ok(())
-}
-
-// ----- Commands ----------------------------------------------------------
-
-async fn issues_cmd(
+pub(super) async fn issues_cmd(
     client: &LinearClient,
     cfg: &Config,
     args: &ParsedArgs,
@@ -165,7 +75,7 @@ async fn issues_cmd(
     Ok(())
 }
 
-async fn search_cmd(
+pub(super) async fn search_cmd(
     client: &LinearClient,
     cfg: &Config,
     args: &ParsedArgs,
@@ -188,7 +98,7 @@ async fn search_cmd(
     Ok(())
 }
 
-async fn view_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
+pub(super) async fn view_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
     let id = args
         .pos
         .first()
@@ -202,7 +112,7 @@ async fn view_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Resul
     Ok(())
 }
 
-async fn create_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
+pub(super) async fn create_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
     let key = args
         .flag("team")
         .map(str::to_uppercase)
@@ -256,7 +166,11 @@ async fn create_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Res
     Ok(())
 }
 
-async fn comment_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
+pub(super) async fn comment_cmd(
+    client: &LinearClient,
+    args: &ParsedArgs,
+    json: bool,
+) -> Result<()> {
     let id = args
         .pos
         .first()
@@ -278,7 +192,7 @@ async fn comment_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Re
     Ok(())
 }
 
-async fn state_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
+pub(super) async fn state_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
     let id = args
         .pos
         .first()
@@ -305,7 +219,7 @@ async fn state_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Resu
     Ok(())
 }
 
-async fn assign_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
+pub(super) async fn assign_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Result<()> {
     let id = args
         .pos
         .first()
@@ -335,7 +249,7 @@ async fn assign_cmd(client: &LinearClient, args: &ParsedArgs, json: bool) -> Res
     Ok(())
 }
 
-async fn states_cmd(
+pub(super) async fn states_cmd(
     client: &LinearClient,
     cfg: &Config,
     args: &ParsedArgs,
@@ -353,7 +267,7 @@ async fn states_cmd(
     Ok(())
 }
 
-async fn projects_cmd(
+pub(super) async fn projects_cmd(
     client: &LinearClient,
     cfg: &Config,
     args: &ParsedArgs,
@@ -376,7 +290,7 @@ async fn projects_cmd(
     Ok(())
 }
 
-async fn members_cmd(
+pub(super) async fn members_cmd(
     client: &LinearClient,
     cfg: &Config,
     args: &ParsedArgs,
@@ -462,183 +376,9 @@ fn parse_view(s: &str) -> Result<View> {
     View::parse(s).ok_or_else(|| anyhow!("unknown view `{s}` (use: my|active|backlog|all)"))
 }
 
-// ----- Output ------------------------------------------------------------
-
-fn print_json<T: Serialize>(v: &T) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(v)?);
-    Ok(())
-}
-
-fn print_issue_list(issues: &[crate::domain::Issue]) {
-    if issues.is_empty() {
-        println!("(no issues)");
-        return;
-    }
-    for it in issues {
-        let state = it.state.as_ref().map(|s| s.name.as_str()).unwrap_or("—");
-        let who = it
-            .assignee
-            .as_ref()
-            .map(|a| format!("@{}", a.label()))
-            .unwrap_or_default();
-        println!(
-            "{:<10} {:<4} {:<16} {:<14} {}",
-            it.identifier,
-            it.priority_label(),
-            truncate(state, 16),
-            truncate(&who, 14),
-            it.title,
-        );
-    }
-}
-
-fn print_issue_detail(d: &crate::domain::IssueDetail) {
-    println!("{}  {}", d.identifier, d.title);
-    if let Some(s) = &d.state {
-        println!("State:    {} ({})", s.name, s.kind);
-    }
-    println!(
-        "Assignee: {}",
-        d.assignee.as_ref().map(|a| a.label()).unwrap_or("—")
-    );
-    println!("Priority: {}", crate::domain::priority_label(d.priority));
-    if let Some(p) = &d.parent {
-        println!("Parent:   {} {}", p.identifier, p.title);
-    }
-    if let Some(url) = &d.url {
-        println!("URL:      {url}");
-    }
-    if let Some(desc) = d.description.as_deref().filter(|s| !s.trim().is_empty()) {
-        println!("\nDescription:\n{desc}");
-    }
-    if !d.children.is_empty() {
-        println!("\nSub-issues ({}):", d.children.len());
-        for c in &d.children {
-            let state = c.state.as_ref().map(|s| s.name.as_str()).unwrap_or("—");
-            println!("  {:<10} [{}] {}", c.identifier, state, c.title);
-        }
-    }
-    if !d.comments.is_empty() {
-        println!("\nComments ({}):", d.comments.len());
-        for c in &d.comments {
-            let who = c.user.as_ref().map(|u| u.label()).unwrap_or("?");
-            let when = c.created_at.as_deref().unwrap_or("");
-            println!("  {who}  {when}");
-            for line in c.body.lines() {
-                println!("    {line}");
-            }
-        }
-    }
-}
-
-/// Truncate to `max` characters (not bytes), appending "…" when cut.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
-fn print_help() {
-    println!(
-        "linear-tui — Linear from the terminal\n\
-         \n\
-         Usage:\n\
-         \x20 linear-tui                      launch the interactive TUI\n\
-         \x20 linear-tui <command> [args]     run a one-shot CLI command\n\
-         \n\
-         Read commands:\n\
-         \x20 me                              show the authenticated user\n\
-         \x20 teams                           list teams (KEY  name)\n\
-         \x20 issues [--team K] [--view V]    list issues; V = my|active|backlog|all (default my)\n\
-         \x20        [--project NAME] [--mine] [--limit N]\n\
-         \x20 search <text...> [--limit N]    full-text search across all issues\n\
-         \x20 view <ISSUE>                    full detail (description, sub-issues, comments)\n\
-         \x20 states  --team K                list a team's workflow states\n\
-         \x20 projects --team K               list a team's projects\n\
-         \x20 members  --team K               list a team's members\n\
-         \n\
-         Write commands:\n\
-         \x20 create --team K --title T [--description D] [--priority 0-4] [--assignee me|name] [--parent ISSUE]\n\
-         \x20 comment <ISSUE> <body...>       add a comment\n\
-         \x20 state   <ISSUE> <state>         change workflow state (name or done/todo/progress/…)\n\
-         \x20 assign  <ISSUE> <me|none|name>  set or clear the assignee\n\
-         \n\
-         Issues are addressed by identifier (e.g. ENG-123). Add --json to any\n\
-         command for machine-readable output. Config/API key: see `linear-tui` README.\n\
-         \n\
-         Other:\n\
-         \x20 serve                           stdio JSON-RPC backend (Neovim plugin)"
-    );
-}
-
-// ----- Argument parsing --------------------------------------------------
-
-/// A minimal argv split into positionals, value flags (`--key value`) and
-/// boolean flags ([`BOOL_FLAGS`]). Deliberately tiny — the command set is small
-/// and fixed, so a full parser dependency isn't worth it.
-struct ParsedArgs {
-    pos: Vec<String>,
-    flags: HashMap<String, String>,
-    bools: HashSet<String>,
-}
-
-impl ParsedArgs {
-    fn parse(args: &[String]) -> Self {
-        let mut pos = Vec::new();
-        let mut flags = HashMap::new();
-        let mut bools = HashSet::new();
-        let mut i = 0;
-        while i < args.len() {
-            if let Some(name) = args[i].strip_prefix("--") {
-                if BOOL_FLAGS.contains(&name) {
-                    bools.insert(name.to_string());
-                } else if let Some(value) = args.get(i + 1) {
-                    flags.insert(name.to_string(), value.clone());
-                    i += 1;
-                } else {
-                    // Trailing `--key` with no value: record it empty.
-                    flags.insert(name.to_string(), String::new());
-                }
-            } else {
-                pos.push(args[i].clone());
-            }
-            i += 1;
-        }
-        Self { pos, flags, bools }
-    }
-
-    fn flag(&self, key: &str) -> Option<&str> {
-        self.flags.get(key).map(String::as_str)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn argv(s: &[&str]) -> Vec<String> {
-        s.iter().map(|x| x.to_string()).collect()
-    }
-
-    #[test]
-    fn parses_positionals_flags_and_bools() {
-        let a = ParsedArgs::parse(&argv(&[
-            "ENG-1", "hello", "world", "--team", "ENG", "--json",
-        ]));
-        assert_eq!(a.pos, ["ENG-1", "hello", "world"]);
-        assert_eq!(a.flag("team"), Some("ENG"));
-        assert!(a.bools.contains("json"));
-        assert!(!a.bools.contains("mine"));
-    }
-
-    #[test]
-    fn trailing_value_flag_without_value_is_empty() {
-        let a = ParsedArgs::parse(&argv(&["--title"]));
-        assert_eq!(a.flag("title"), Some(""));
-    }
 
     #[test]
     fn view_parsing_is_lenient() {
@@ -674,12 +414,5 @@ mod tests {
         assert_eq!(match_state(&states, "done").unwrap().id, "3"); // type keyword
         assert_eq!(match_state(&states, "todo").unwrap().id, "1");
         assert!(match_state(&states, "shipped").is_none());
-    }
-
-    #[test]
-    fn truncate_counts_chars() {
-        assert_eq!(truncate("hello", 10), "hello");
-        assert_eq!(truncate("hello world", 5), "hell…");
-        assert_eq!(truncate("café", 10), "café");
     }
 }

@@ -216,6 +216,10 @@ linear-tui create --team ENG --title "Sub-task" --parent ENG-123   # a sub-issue
 linear-tui comment ENG-123 "shipping today"
 linear-tui state   ENG-123 "In Progress"     # name, or done/todo/progress/backlog/canceled
 linear-tui assign  ENG-123 me                # me | none | <name>
+
+# no API key needed
+linear-tui version                    # version + repository
+linear-tui sponsor                    # how to fund the project / commercial support
 ```
 
 `issues --view` is `my | active | backlog | all` (default `my`, cross-team).
@@ -266,6 +270,19 @@ state / assignee / add a comment / create / open-in-browser / parent / sub-issue
 Run `:checkhealth linear-tui` to verify the binary is found and the backend can
 authenticate. Full docs: `:help linear-tui`.
 
+## Sponsor
+
+linear-tui is MIT and stays that way — no paid tier, no licence key, nothing
+behind a paywall, and it never phones home. If it's useful to you or your team,
+sponsoring is what keeps it maintained: tracking Linear's API, triaging issues,
+and shipping the apt/AUR packages.
+
+**[Sponsor on GitHub →](https://github.com/sponsors/Euraba)** — tiers and what
+each one buys are in [docs/SPONSORS.md](docs/SPONSORS.md).
+
+Paid contract work (feature development, private packaging, integration work,
+support retainers) is available separately: **rares@trydio.com**.
+
 ## Architecture
 
 - **`config.rs`** — loads the Lua config via [`mlua`].
@@ -286,6 +303,9 @@ authenticate. Full docs: `:help linear-tui`.
   reuses the same client/config/models to serve the Neovim plugin (see below).
 - **`cli.rs`** — `linear-tui <command>`: a one-shot, scriptable CLI over the same
   client (for agents/scripts; see [CLI](#cli-linear-tui-command)).
+- **`sponsor.rs`** — the funding links, in one place, rendered by the CLI, the
+  `?` help overlay and the README (see [Sponsor](#sponsor)). No licence checks,
+  no network calls.
 
 Scope is intentionally "browse + core writes" (state, assignee, comment, create),
 mirroring slack-tui's browse-plus-one-action shape.

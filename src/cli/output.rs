@@ -111,8 +111,16 @@ pub(super) fn print_help() {
          command for machine-readable output. Config/API key: see `linear-tui` README.\n\
          \n\
          Other:\n\
+         \x20 version                         print the version\n\
+         \x20 sponsor                         how to fund the project / commercial support\n\
          \x20 serve                           stdio JSON-RPC backend (Neovim plugin)"
     );
+}
+
+pub(super) fn print_version() {
+    println!("linear-tui {}", env!("CARGO_PKG_VERSION"));
+    println!("{}", env!("CARGO_PKG_REPOSITORY"));
+    println!("{}", crate::sponsor::one_liner());
 }
 
 #[cfg(test)]

@@ -249,6 +249,10 @@ pub(super) fn draw_help(f: &mut Frame) {
         Line::from("  q / Ctrl-C        quit"),
         Line::from(""),
         Line::from(Span::styled(
+            format!("  {}", crate::sponsor::one_liner()),
+            Style::default().fg(ACCENT),
+        )),
+        Line::from(Span::styled(
             "  Press any key to close.",
             Style::default().fg(Color::DarkGray),
         )),

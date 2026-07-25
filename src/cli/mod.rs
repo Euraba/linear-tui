@@ -40,6 +40,16 @@ pub fn run() -> Result<()> {
         output::print_help();
         return Ok(());
     }
+    // Version and funding info are answered before `Config::load`, so they
+    // still work on a machine with no API key configured yet.
+    if matches!(cmd.as_str(), "-V" | "--version" | "version") {
+        output::print_version();
+        return Ok(());
+    }
+    if matches!(cmd.as_str(), "sponsor" | "donate" | "fund") {
+        println!("{}", crate::sponsor::blurb());
+        return Ok(());
+    }
 
     let args = ParsedArgs::parse(&argv);
     let json = args.bools.contains("json");

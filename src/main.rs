@@ -15,6 +15,7 @@ mod linear;
 mod search;
 mod serve;
 mod settings;
+mod sponsor;
 mod ui;
 mod worker;
 
